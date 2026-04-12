@@ -5,14 +5,14 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 
 ## Open todos
 - ✅ **Verify Telegram bridge end-to-end** — DONE 2026-04-12. Bot responds to DMs.
-- ⏳ **Make post-onboard fixes persistent** — `/etc/hosts`, symlinks, and token injection are all lost on sandbox restart. Currently handled by `scripts/telegram-setup.sh`. Permanent fix would require HostAlias + Landlock policy changes at `nemoclaw onboard` time.
+- ⏳ **Make post-onboard fixes persistent** — `/etc/hosts`, symlinks, and token injection are all lost on sandbox restart. Currently handled by `scripts/post-onboard.sh`. Permanent fix would require HostAlias + Landlock policy changes at `nemoclaw onboard` time.
 - ⏳ **Investigate native gateway lifecycle management** — `start-gateway.sh` is a collection of hacks: `nohup` + background process with no PID file, `sleep 2` timing guess before status check, no kill-before-start (starting twice conflicts), and brittle `sed` parsing of `ssh-config` output. Check if newer openclaw/nemoclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) nemoclaw managing the gateway as part of sandbox lifecycle (auto-start on onboard, restart on crash), (3) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
-- ⏳ **Investigate native alternatives to telegram-setup.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config in `nemoclaw onboard` for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to nemoclaw so these steps don't have to be run manually after every `--recreate-sandbox`.
+- ⏳ **Investigate native alternatives to post-onboard.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config in `nemoclaw onboard` for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to nemoclaw so these steps don't have to be run manually after every `--recreate-sandbox`.
 - ✅ **Test initial openclaw onboarding flow** — verified 2026-04-12 on fresh sandbox; bot replied and remembered user's name
 - ✅ **SearXNG as a dedicated tool** — DONE 2026-04-12. `web_fetch` blocked by openclaw SSRF layer for `.internal` domains. Final approach: `exec` + `curl` to `http://host.openshell.internal:8888/search?q=...&format=json`. Agent taught via `TOOLS.md` in workspace (`/sandbox/.openclaw-data/workspace/TOOLS.md`). NOT solvable via plugin in v2026.3.11 — used workspace context injection instead.
 - ✅ **Disable/hide unusable `web_search` tool** — DONE 2026-04-12. `tools.deny: ["web_search"]` in `openclaw.json` (top-level key). Validated working.
-- ⏳ **Investigate native SearXNG integration** — Current approach (TOOLS.md injection + `exec`/curl) is a workaround. Check if newer openclaw versions support: (1) a `searxng` provider for `tools.web.search.provider`, (2) a SearXNG plugin, (3) `allowPrivateNetwork` or equivalent for `web_fetch`, or (4) a first-class custom tool/search provider API. Revisit when upgrading openclaw past v2026.3.11.
-- ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `telegram-setup.sh`, (3) whether newer openclaw/Landlock versions resolve this.
+- ⏳ **Replace SearXNG TOOLS.md workaround with MCP tool** — Current approach (TOOLS.md context injection + `exec`/curl) is intentionally temporary. openclaw v2026.3.11 has no MCP support; it was confirmed added in later versions. When upgrading openclaw, replace with a proper registered MCP `search` tool: write a minimal stdio MCP server that wraps SearXNG, register it via `openclaw mcp set`. This eliminates the TOOLS.md hack and gives the agent a first-class named tool.
+- ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `post-onboard.sh`, (3) whether newer openclaw/Landlock versions resolve this.
 - ⏳ **Policy builder/applier UI** — the current policy workflow (hand-editing YAML, running `openshell policy set`, knowing about full-replacement semantics, `allowed_ips` for internal IPs, etc.) is too complex for most users. Build a simple interface that lets users add/remove endpoints and applies the full policy file correctly.
 
 ## Documentation references
@@ -97,8 +97,8 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 - **openclaw**: v2026.3.11 (from fresh sandbox rebuild 2026-04-12)
 - **Telegram**: fully working — gateway running (mode:polling, @whiskey_papa_bot), bot responds to DMs; user ID `8362082345` in `allowFrom`
 - **SearXNG**: running via Docker Compose on host port **8888** (not 8080 — conflict with openshell cluster)
-- **Active policy**: v5 (applied via `telegram-setup.sh` 2026-04-12)
-- **Scripts**: `scripts/telegram-setup.sh` and `scripts/start-gateway.sh` — run after every onboard
+- **Active policy**: v5 (applied via `post-onboard.sh` 2026-04-12)
+- **Scripts**: `scripts/post-onboard.sh` and `scripts/start-gateway.sh` — run after every onboard
 
 ## What works
 - ✅ Basic chat: `openclaw agent --agent main --local -m "hi" --session-id test`
@@ -175,9 +175,9 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
   sh -c 'rm -f /sandbox/.openclaw/workspace-state.json && touch /sandbox/.openclaw-data/workspace-state.json && chown sandbox:sandbox /sandbox/.openclaw-data/workspace-state.json && ln -s /sandbox/.openclaw-data/workspace-state.json /sandbox/.openclaw/workspace-state.json'
 ```
 Also added `/sandbox/.openclaw/workspace-state.json` to `read_write` in `policies/sandbox-policy.yaml`.
-> ⚠️ Not persistent — lost on sandbox rebuild. Now included in step [4/4] of `scripts/telegram-setup.sh`.
+> ⚠️ Not persistent — lost on sandbox rebuild. Now included in step [4/4] of `scripts/post-onboard.sh`.
 
-**Note (2026-04-12)**: `agents.defaults.workspace` is now set (required for TOOLS.md injection). The symlink + policy `read_write` entry appears sufficient for openclaw to write workspace-state.json without EACCES. If EACCES returns after a rebuild, re-run `scripts/telegram-setup.sh` (step 4 creates the symlink).
+**Note (2026-04-12)**: `agents.defaults.workspace` is now set (required for TOOLS.md injection). The symlink + policy `read_write` entry appears sufficient for openclaw to write workspace-state.json without EACCES. If EACCES returns after a rebuild, re-run `scripts/post-onboard.sh` (step 4 creates the symlink).
 
 ### `openclaw.json` zeroed out after config edit
 **Cause**: Reading and writing `openclaw.json` through the same pipeline races — `cat > openclaw.json` truncates the file before `cat openclaw.json` finishes reading. Symptom: file size becomes 0.

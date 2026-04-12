@@ -196,7 +196,7 @@ Update `policies/sandbox-policy.yaml` if the IP differs:
 
 ### 6b. Test internet search via agent
 
-> The network policy must be applied before this will work. It's applied automatically by `telegram-setup.sh` in [Step 7d](#7d-post-onboard-telegram-setup-required-after-every-onboard) — complete that first, then come back here to test.
+> The network policy must be applied before this will work. It's applied automatically by `post-onboard.sh` in [Step 7d](#7d-post-onboard-telegram-setup-required-after-every-onboard) — complete that first, then come back here to test.
 
 **Sandbox:**
 ```bash
@@ -209,6 +209,8 @@ openclaw agent --agent main --local \
 > (SSRF protection). The `bash` tool can reach `host.openshell.internal` once the network policy allows it.
 
 ### 6c. Configure agent to search automatically (without prompting)
+
+> ⚠️ **This is a temporary workaround.** The current approach teaches the agent to use SearXNG via a `TOOLS.md` context file + `exec` + curl. The proper solution is an MCP tool — openclaw adds MCP support in versions after v2026.3.11. This should be replaced with a registered `search` MCP tool once openclaw is upgraded.
 
 Two config changes make the agent use SearXNG automatically for any search request:
 
@@ -313,35 +315,40 @@ Add your ID to `ALLOWED_CHAT_IDS` in `.env`:
 ALLOWED_CHAT_IDS=<your-telegram-user-id>
 ```
 
-> `ALLOWED_CHAT_IDS` must be set before running `telegram-setup.sh` — the script injects it into `allowFrom` in the openclaw config. If it's not set, the bot will silently drop your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value (the bot token's numeric prefix instead of your user ID) — the setup script overwrites it.
+> `ALLOWED_CHAT_IDS` must be set before running `post-onboard.sh` — the script injects it into `allowFrom` in the openclaw config. If it's not set, the bot will silently drop your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value (the bot token's numeric prefix instead of your user ID) — the setup script overwrites it.
 
-### 7d. Post-onboard Telegram setup (required after every onboard)
+### 7d. Post-onboard setup (required after every onboard)
 
-After onboarding, four fixes are required due to bugs and Landlock filesystem restrictions in the current openclaw version.
+After onboarding, run the setup script. It handles everything in one shot — Telegram fixes, SearXNG config, and workspace setup.
 
 > ⚠️ **VPN**: Disconnect any VPN before starting — VPNs commonly SNI-filter `api.telegram.org`.
-> ⚠️ All fixes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ All changes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
 
 **Host** (repo root):
 ```bash
-./scripts/telegram-setup.sh
+./scripts/post-onboard.sh
 ```
 
-> Note: `openclaw configure` is blocked by Landlock inside the sandbox — the script uses `kubectl exec` to update `openclaw.json` directly.
+> `openclaw configure` is blocked by Landlock inside the sandbox — the script uses `kubectl exec` to patch `openclaw.json` directly from the host.
 
 <details>
-<summary>Why each fix is needed</summary>
+<summary>What each step does</summary>
 
-**Fix 1 — Policy**: The full sandbox policy must be applied after onboarding (Telegram network rules, SearXNG rules, etc.).
+**Step 1 — Policy**: Applies the full sandbox policy (Telegram network rules, SearXNG rules, npm, pypi). `openshell policy set` replaces the entire policy — always use `policies/sandbox-policy.yaml`.
 
-**Fix 2 — Bot token**: openclaw stores the token as `openshell:resolve:env:TELEGRAM_BOT_TOKEN` after onboarding. As of v2026.4.10, this placeholder is not resolved at runtime — the literal string gets sent to Telegram, returning 404.
+**Step 2 — Patch openclaw.json**: Three fixes in one write:
+- *Bot token*: openclaw stores the token as a literal placeholder string after onboarding — injects the real token from `.env`
+- *allowFrom*: nemoclaw onboard may set this to the bot token's numeric prefix instead of your Telegram user ID — overwrites from `ALLOWED_CHAT_IDS` in `.env`
+- *Agent config*: sets `tools.deny: [web_search]` (disables broken Brave Search) and `agents.defaults.workspace` (required for TOOLS.md injection)
 
-**Fix 3 — Telegram DNS**: The sandbox `/etc/resolv.conf` nameserver (`10.200.0.1`) has no DNS on port 53 — all queries time out. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; if DNS fails, it blocks. Adding the hostname to `/etc/hosts` bypasses this check.
+**Step 3 — Telegram DNS**: The sandbox nameserver (`10.200.0.1`) has no DNS on port 53. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; DNS failure = blocked connection. Adds a static `/etc/hosts` entry to bypass this.
 
-**Fix 4 — Writable dirs/files**: openclaw tries to write to several paths under `/sandbox/.openclaw/` (read-only via Landlock). Fixed by symlinking to `/sandbox/.openclaw-data/` (read-write):
-- `credentials/` — needed for `openclaw pairing list telegram`; without it EACCES on pairing
-- `telegram/` — gateway writes update offsets here; without it, messages may re-deliver after restart
-- `workspace-state.json` — gateway writes agent workspace state here; without it, **every message fails** with EACCES and the bot sends error responses instead of answers
+**Step 4 — Writable symlinks**: Landlock marks `/sandbox/.openclaw` read-only. openclaw writes to several paths there at runtime — creates symlinks to the writable `/sandbox/.openclaw-data/`:
+- `credentials/` — needed for `openclaw pairing list telegram`
+- `telegram/` — gateway writes update offsets here (prevents message re-delivery on restart)
+- `workspace-state.json` — gateway writes agent state here; missing = every message returns an error
+
+**Step 5 — SearXNG TOOLS.md**: Creates a `TOOLS.md` in the agent workspace teaching the agent to use `exec` + curl for web search. Temporary workaround until openclaw supports MCP (later versions).
 </details>
 
 ### 7e. Start the openclaw gateway
@@ -648,7 +655,7 @@ Run the [7d consolidated script](#7d-post-onboard-telegram-setup-required-after-
 | `openclaw pairing list` EACCES | Missing writable credentials dir | Fix 4 in §7d script |
 | `failed to persist update offset` | Missing writable telegram state dir | Fix 4 in §7d script |
 | Bot replies "something went wrong" to every message | `workspace-state.json` EACCES (missing writable file symlink) | Fix 4 in §7d script |
-| Bot receives messages but never responds (no `sendMessage` in logs) | `allowFrom` set to wrong value — `nemoclaw onboard` may set it to the bot token's numeric prefix instead of your Telegram user ID | Re-run `telegram-setup.sh` with `ALLOWED_CHAT_IDS` set in `.env` |
+| Bot receives messages but never responds (no `sendMessage` in logs) | `allowFrom` set to wrong value — `nemoclaw onboard` may set it to the bot token's numeric prefix instead of your Telegram user ID | Re-run `post-onboard.sh` with `ALLOWED_CHAT_IDS` set in `.env` |
 | All connections blocked after `openshell term` | Term approvals create broken `allow_*` override policies | Re-apply full policy |
 | Telegram unreachable from host | VPN SNI-filters `api.telegram.org` | Disconnect VPN |
 
