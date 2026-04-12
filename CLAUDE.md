@@ -6,13 +6,15 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 ## Open todos
 - ✅ **Verify Telegram bridge end-to-end** — DONE 2026-04-12. Bot responds to DMs.
 - ⏳ **Make post-onboard fixes persistent** — `/etc/hosts`, symlinks, and token injection are all lost on sandbox restart. Currently handled by `scripts/post-onboard.sh`. Permanent fix would require HostAlias + Landlock policy changes at `nemoclaw onboard` time.
-- ⏳ **Investigate native gateway lifecycle management** — `start-gateway.sh` is a collection of hacks: `nohup` + background process with no PID file, `sleep 2` timing guess before status check, no kill-before-start (starting twice conflicts), and brittle `sed` parsing of `ssh-config` output. Check if newer openclaw/nemoclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) nemoclaw managing the gateway as part of sandbox lifecycle (auto-start on onboard, restart on crash), (3) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
+- ⏳ **Investigate native gateway lifecycle management** — `start-openclaw-gateway.sh` is a collection of hacks: `nohup` + background process with no PID file, `sleep 2` timing guess before status check, no kill-before-start (starting twice conflicts), and brittle `sed` parsing of `ssh-config` output. Check if newer openclaw/nemoclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) nemoclaw managing the gateway as part of sandbox lifecycle (auto-start on onboard, restart on crash), (3) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
 - ⏳ **Investigate native alternatives to post-onboard.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config in `nemoclaw onboard` for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to nemoclaw so these steps don't have to be run manually after every `--recreate-sandbox`.
 - ✅ **Test initial openclaw onboarding flow** — verified 2026-04-12 on fresh sandbox; bot replied and remembered user's name
 - ✅ **SearXNG as a dedicated tool** — DONE 2026-04-12. `web_fetch` blocked by openclaw SSRF layer for `.internal` domains. Final approach: `exec` + `curl` to `http://host.openshell.internal:8888/search?q=...&format=json`. Agent taught via `TOOLS.md` in workspace (`/sandbox/.openclaw-data/workspace/TOOLS.md`). NOT solvable via plugin in v2026.3.11 — used workspace context injection instead.
 - ✅ **Disable/hide unusable `web_search` tool** — DONE 2026-04-12. `tools.deny: ["web_search"]` in `openclaw.json` (top-level key). Validated working.
+- ⏳ **SearXNG TOOLS.md not being injected** — `TOOLS.md` is 0 bytes (heredoc write in `post-onboard.sh` is broken — heredoc is consumed by local shell, not passed to kubectl exec) AND openclaw may not read `TOOLS.md` at all. Injected files are: `AGENTS.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`. Need to: (1) fix the write approach in `post-onboard.sh` (use `kubectl exec -i` with piped stdin instead of heredoc), (2) confirm whether to append to `AGENTS.md` or whether `TOOLS.md` is also read. Check existing `AGENTS.md` content before overwriting.
 - ⏳ **Replace SearXNG TOOLS.md workaround with MCP tool** — Current approach (TOOLS.md context injection + `exec`/curl) is intentionally temporary. openclaw v2026.3.11 has no MCP support; it was confirmed added in later versions. When upgrading openclaw, replace with a proper registered MCP `search` tool: write a minimal stdio MCP server that wraps SearXNG, register it via `openclaw mcp set`. This eliminates the TOOLS.md hack and gives the agent a first-class named tool.
 - ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `post-onboard.sh`, (3) whether newer openclaw/Landlock versions resolve this.
+- ⏳ **Investigate live model swapping** — `NEMOCLAW_MODEL` and `NEMOCLAW_PRIMARY_MODEL_REF` are baked into the sandbox pod's environment variables at `nemoclaw onboard` time. Changing the model in `openclaw.json` alone has no effect — the gateway reads the env vars. Investigate: (1) whether nemoclaw provides a `nemoclaw my-assistant set-model <model>` or equivalent command, (2) whether patching the pod env vars via `kubectl patch` + pod restart is viable without a full onboard, (3) whether there's a nemoclaw API for this.
 - ⏳ **Policy builder/applier UI** — the current policy workflow (hand-editing YAML, running `openshell policy set`, knowing about full-replacement semantics, `allowed_ips` for internal IPs, etc.) is too complex for most users. Build a simple interface that lets users add/remove endpoints and applies the full policy file correctly.
 
 ## Documentation references
@@ -29,7 +31,7 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 - Channel messaging (Telegram, Discord) is configured during `nemoclaw onboard` or by writing to `openclaw.json` via kubectl exec — NOT via `nemoclaw start` (that's cloudflared tunnel only)
 - `nemoclaw start` = cloudflared tunnel. `nemoclaw status` = sandbox list + cloudflared. Neither reflects Telegram state.
 - Telegram status: `openclaw channels status` inside sandbox
-- Gateway must be started manually after config changes: `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &` inside sandbox (or use `./scripts/start-gateway.sh` from host)
+- Gateway must be started manually after config changes: `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &` inside sandbox (or use `./scripts/start-openclaw-gateway.sh` from host)
 - Pairing: only needed if `dmPolicy: pairing` — first DM generates a code → `openclaw pairing list telegram` → `openclaw pairing approve telegram <CODE>`. With `dmPolicy: allowlist` and user in `allowFrom`, DMs work without pairing.
 
 ## Architecture note
@@ -98,7 +100,7 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 - **Telegram**: fully working — gateway running (mode:polling, @whiskey_papa_bot), bot responds to DMs; user ID `8362082345` in `allowFrom`
 - **SearXNG**: running via Docker Compose on host port **8888** (not 8080 — conflict with openshell cluster)
 - **Active policy**: v5 (applied via `post-onboard.sh` 2026-04-12)
-- **Scripts**: `scripts/post-onboard.sh` and `scripts/start-gateway.sh` — run after every onboard
+- **Scripts**: `scripts/post-onboard.sh` and `scripts/start-openclaw-gateway.sh` — run after every onboard
 
 ## What works
 - ✅ Basic chat: `openclaw agent --agent main --local -m "hi" --session-id test`
@@ -106,13 +108,13 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 - ✅ SearXNG reachable from host on port 8888
 - ✅ SearXNG reachable from inside sandbox — fixed with `allowed_ips` in policy (see below)
 - ✅ Sandbox rebuilt with fresh openclaw; Telegram configured via provider pipeline
-- ✅ Telegram gateway running (mode:polling) — bot token injected, DNS fixed, VPN off
+- ✅ openclaw gateway running (mode:polling) — bot token injected, DNS fixed, VPN off
 - ✅ `openclaw pairing list telegram` works — credentials symlink created
 - ✅ Telegram end-to-end DM — bot responds to DMs (2026-04-12)
 
 ## Known Bugs / Workarounds
 
-### Telegram gateway — RESOLVED as of 2026-04-12
+### openclaw gateway — RESOLVED as of 2026-04-12
 **Status**: Gateway running (mode:polling, @whiskey_papa_bot). Three separate issues were fixed.
 
 **Upstream issues tracked**:
@@ -270,7 +272,7 @@ Secrets (bot tokens, chat IDs, etc.) go in `.env` (gitignored). `.env.example` i
 openshell logs --tail
 openshell logs --tail --source sandbox --level debug
 
-# Verify Telegram gateway is polling (look for getUpdates in the output)
+# Verify openclaw gateway is polling (look for getUpdates in the output)
 openshell logs --tail | grep -i telegram
 
 # Check Telegram channel status (run from host via SSH)
@@ -344,10 +346,10 @@ Then start a new one:
 # Via SSH
 nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
 # Or from host:
-./scripts/start-gateway.sh
+./scripts/start-openclaw-gateway.sh
 ```
 
-The `start-gateway.sh` script already handles kill + restart but uses SIGTERM. If the gateway is stuck, use `kill -9` via kubectl as above.
+The `start-openclaw-gateway.sh` script already handles kill + restart but uses SIGTERM. If the gateway is stuck, use `kill -9` via kubectl as above.
 
 ## SearXNG integration approach
 - SearXNG runs in Docker Compose on host port 8888

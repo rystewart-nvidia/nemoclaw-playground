@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the openclaw gateway inside the sandbox.
-# Usage: ./scripts/start-gateway.sh [sandbox-name]
+# Usage: ./scripts/start-openclaw-gateway.sh [sandbox-name]
 #
 # Run this after telegram-setup.sh. The gateway runs persistently inside the sandbox
 # and handles all channel connections (Telegram, Discord, etc.).

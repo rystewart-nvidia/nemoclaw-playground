@@ -169,9 +169,15 @@ ls -la /sandbox/.openclaw/credentials /sandbox/.openclaw/telegram /sandbox/.open
 # [5/5] Configure SearXNG
 # ---------------------------------------------------------------------------
 # openclaw v2026.3.11 has no MCP support and no native SearXNG provider.
-# Workaround: inject a TOOLS.md file into the agent workspace. openclaw reads
-# this file on every agent run and injects it into the system prompt, teaching
-# the agent to use `exec` + curl to reach SearXNG at host.openshell.internal:8888.
+# Workaround: inject instructions into AGENTS.md in the agent workspace.
+# openclaw reads AGENTS.md on every agent run and injects it into the system
+# prompt, teaching the agent to use `exec` + curl to reach SearXNG.
+#
+# File must be named AGENTS.md (not TOOLS.md) — openclaw only reads:
+#   AGENTS.md, BOOTSTRAP.md, HEARTBEAT.md
+#
+# Write pattern: heredoc provides stdin to `docker exec -i` → `kubectl exec -i`
+# → `sh -c 'cat > file'`. Both -i flags are required to thread stdin through.
 #
 # TODO: replace with a proper MCP tool when upgrading past openclaw v2026.3.11.
 # See: https://docs.openclaw.ai/cli (mcp subcommand added in later versions).
@@ -179,8 +185,8 @@ echo "==> [5/5] Configuring SearXNG workspace context..."
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "$SANDBOX" -- \
     mkdir -p /sandbox/.openclaw-data/workspace
 
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "$SANDBOX" -- \
-    sh -c 'cat > /sandbox/.openclaw-data/workspace/TOOLS.md' << 'EOF'
+docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell "$SANDBOX" -- \
+    sh -c 'cat > /sandbox/.openclaw-data/workspace/AGENTS.md' << 'EOF'
 ## Web Search: SearXNG
 
 Use the `exec` tool with curl to search the web — do NOT use `web_fetch` (blocked for internal hostnames by openclaw SSRF protection).
@@ -189,11 +195,13 @@ curl -sf "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
 
 Replace YOUR+QUERY with URL-encoded search terms (spaces → +).
 
+IMPORTANT: the `number_of_results` field in the response is always 0 — ignore it. Results are in the `results[]` array. Always check `results` length to determine if the search succeeded.
+
 Key fields in each results[] entry: title, url, content (snippet).
 
-Example:
-curl -sf "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; [print(r['title'], r['url'], r.get('content','')[:100]) for r in json.load(sys.stdin)['results'][:5]]"
+Example — search and print top 5:
+curl -sf "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; r=json.load(sys.stdin)['results']; print(len(r),'results'); [print(x['title'], x['url']) for x in r[:5]]"
 EOF
 
 echo ""
-echo "Done. Next: ./scripts/start-gateway.sh to start the Telegram gateway."
+echo "Done. Next: ./scripts/start-openclaw-gateway.sh to start the openclaw gateway."

@@ -85,6 +85,9 @@ curl -sf "http://localhost:8888/search?q=test&format=json" | python3 -m json.too
 
 ## 3. Onboard
 
+### 3a. First-time onboard
+
+**Host:**
 ```bash
 nemoclaw onboard
 ```
@@ -96,11 +99,17 @@ When prompted:
 - **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID
 - **Sandbox name** → choose anything, e.g. `my-assistant`
 
-> To rebuild an existing sandbox (e.g. to upgrade openclaw or re-wire Telegram through the provider pipeline):
-> ```bash
-> source .env && nemoclaw onboard --recreate-sandbox --yes-i-accept-third-party-software
-> ```
+### 3b. Rebuild an existing sandbox
+
+Use this to switch models, upgrade openclaw, or re-wire Telegram:
+
+**Host:**
+```bash
+nemoclaw onboard --recreate-sandbox --yes-i-accept-third-party-software
+```
+
 > This command is **interactive** — `--non-interactive` mode requires `NVIDIA_API_KEY` and defaults to NIM, not ollama.
+> After rebuilding, re-run `./scripts/post-onboard.sh` and `./scripts/start-openclaw-gateway.sh`.
 
 Verify onboarding succeeded:
 ```bash
@@ -198,10 +207,21 @@ Update `policies/sandbox-policy.yaml` if the IP differs:
 
 > The network policy must be applied before this will work. It's applied automatically by `post-onboard.sh` in [Step 7d](#7d-post-onboard-telegram-setup-required-after-every-onboard) — complete that first, then come back here to test.
 
+Tell the agent to execute the curl command directly:
+
 **Sandbox:**
 ```bash
 openclaw agent --agent main --local \
-  -m "Use the bash tool to run: curl -sf 'http://host.openshell.internal:8888/search?q=Airbnb+Bergamo&format=json' | python3 -m json.tool | head -30. Then summarise the results." \
+  -m "Use the bash tool to run: curl -sf 'http://host.openshell.internal:8888/search?q=Airbnb+Bergamo&format=json' | python3 -m json.tool | head -100. Then summarise the results." \
+  --session-id search1
+```
+
+Once step 6c is configured and working, you can ask naturally instead:
+
+**Sandbox:**
+```bash
+openclaw agent --agent main --local \
+  -m "Search for Airbnbs in Bergamo" \
   --session-id search1
 ```
 
@@ -357,7 +377,7 @@ Complete the [7d setup script](#7d-post-onboard-telegram-setup-required-after-ev
 
 **Host:**
 ```bash
-./scripts/start-gateway.sh
+./scripts/start-openclaw-gateway.sh
 ```
 
 The script starts the gateway and prints channel status. To confirm the bot is actively polling:
@@ -373,13 +393,13 @@ openshell logs --tail
 > `/tmp/gateway.log` inside the sandbox only shows lifecycle events (errors, restarts) — not individual message polls.
 > Use `openclaw channels status` (inside sandbox) and `openshell logs --tail` (host) to verify Telegram.
 
-> **If `nemoclaw onboard` auto-started a gateway**: `start-gateway.sh` will fail with "gateway already running". This is safe to ignore — the existing gateway is running. If it's not responding to messages, kill it and restart:
+> **If `nemoclaw onboard` auto-started a gateway**: `start-openclaw-gateway.sh` will fail with "gateway already running". This is safe to ignore — the existing gateway is running. If it's not responding to messages, kill it and restart:
 > ```bash
 > # Kill the existing gateway
 > docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
 >   sh -c 'kill -9 146 2>/dev/null; true'
 > # Start fresh
-> ./scripts/start-gateway.sh
+> ./scripts/start-openclaw-gateway.sh
 > ```
 > Note: the PID may differ — check with `nemoclaw connect` then look for the gateway process.
 
@@ -510,6 +530,26 @@ docker exec openshell-cluster-nemoclaw kubectl get all -n openshell
 
 ---
 
+## Recommended terminals
+
+Keep these two terminal sessions open whenever you are working with the sandbox:
+
+**Terminal 1 — live network log:**
+```bash
+openshell logs --tail
+```
+Shows every connection the sandbox makes — Telegram `getUpdates`/`sendMessage` polls, SearXNG requests, blocked connections. This is the primary signal for whether the gateway is healthy and whether requests are getting through.
+
+**Terminal 2 — interactive policy approvals:**
+```bash
+openshell term
+```
+Shows blocked outbound requests in real-time and lets you approve them interactively. Useful when adding new network destinations (npm packages, new APIs, etc.).
+
+> ⚠️ Do NOT use `openshell term` to approve Telegram connections — it creates an `allow_*` override policy that breaks TLS. Re-apply the full policy after any approval: `openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait`
+
+---
+
 ## Troubleshooting
 
 **Check gateway and Telegram status:**
@@ -631,7 +671,7 @@ print(json.dumps(c,indent=2))
 docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
   sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc-fixed.json
 ```
-Then restart the gateway: `./scripts/start-gateway.sh`
+Then restart the gateway: `./scripts/start-openclaw-gateway.sh`
 
 **Policy blocking requests:**
 ```bash
@@ -642,7 +682,7 @@ openshell term   # approve blocked requests interactively
 > openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
 > ```
 
-**Telegram gateway fails:**
+**openclaw gateway fails:**
 
 Run the [7d consolidated script](#7d-post-onboard-telegram-setup-required-after-every-onboard) first — it covers the most common failures. For individual symptoms:
 
