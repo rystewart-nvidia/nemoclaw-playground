@@ -54,8 +54,13 @@ for dir in credentials telegram; do
     chown sandbox:sandbox /sandbox/.openclaw-data/$dir
     ln -s /sandbox/.openclaw-data/$dir /sandbox/.openclaw/$dir
 done
+# workspace-state.json: single file (not a directory)
+rm -f /sandbox/.openclaw/workspace-state.json
+touch /sandbox/.openclaw-data/workspace-state.json
+chown sandbox:sandbox /sandbox/.openclaw-data/workspace-state.json
+ln -s /sandbox/.openclaw-data/workspace-state.json /sandbox/.openclaw/workspace-state.json
 echo "Symlinks:"
-ls -la /sandbox/.openclaw/credentials /sandbox/.openclaw/telegram
+ls -la /sandbox/.openclaw/credentials /sandbox/.openclaw/telegram /sandbox/.openclaw/workspace-state.json
 '
 
 echo ""

@@ -32,6 +32,7 @@ filesystem_policy:
     - /sandbox/.openclaw-data
     - /sandbox/.openclaw/credentials
     - /sandbox/.openclaw/telegram
+    - /sandbox/.openclaw/workspace-state.json
 
 landlock:
   compatibility: best_effort

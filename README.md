@@ -196,6 +196,53 @@ openclaw agent --agent main --local \
 > Note: use `bash` + curl, not `web_fetch`. OpenClaw's `web_fetch` blocks internal/private IPs
 > (SSRF protection). The `bash` tool can reach `host.openshell.internal` once the network policy allows it.
 
+### 6f. Configure agent to search automatically (without prompting)
+
+Two config changes make the agent use SearXNG automatically for any search request:
+
+**1. Disable the non-functional `web_search` tool** (Brave Search requires an API key we don't have):
+
+Add `"tools": {"deny": ["web_search"]}` as a **top-level key** in `openclaw.json`:
+```bash
+# Read current config, inject tools.deny, write back
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  cat /sandbox/.openclaw/openclaw.json \
+  | python3 -c "
+import json,sys
+c=json.load(sys.stdin)
+c.setdefault('tools',{})['deny']=['web_search']
+print(json.dumps(c,indent=2))
+" | docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
+  sh -c 'cat > /sandbox/.openclaw/openclaw.json'
+```
+
+**2. Teach the agent how to use SearXNG** via `TOOLS.md` in the workspace:
+```bash
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  sh -c 'cat > /sandbox/.openclaw-data/workspace/TOOLS.md' << '"'"'EOF'"'"'
+## Web Search: SearXNG
+
+This agent has a local SearXNG instance for web search. Use it with the `exec` tool via curl — **not** `web_fetch` (which blocks internal hostnames).
+
+curl -sf "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
+
+Replace `YOUR+QUERY` with a URL-encoded search query (spaces → `+` or `%20`).
+
+The response is JSON. Key fields in each `results[]` entry:
+- `title` — page title
+- `url` — page URL
+- `content` — snippet/summary
+
+Example: curl -sf "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; [print(r['"'"'title'"'"'], r['"'"'url'"'"'], r.get('"'"'content'"'"','')[:100]) for r in json.load(sys.stdin)['"'"'results'"'"'][:5]]"
+
+Do not use `web_fetch` for this URL — use `exec` + `curl` only.
+EOF
+```
+
+> The `TOOLS.md` file lives at `/sandbox/.openclaw-data/workspace/TOOLS.md` (via the `.openclaw/workspace` symlink). openclaw injects it into the agent's context on every run.
+
+After these changes, you can ask the bot "Find Airbnbs in Bergamo" and it will curl SearXNG automatically — no URL needed in the prompt.
+
 ---
 
 ## 7. Telegram Bridge
@@ -240,10 +287,10 @@ Find `"chat":{"id":<your-id>}` in the response. Add it to `ALLOWED_CHAT_IDS` in 
 
 The cleanest way to wire up Telegram is to provide the bot token and your user ID **during `nemoclaw onboard`** (or `nemoclaw onboard --recreate-sandbox`). The wizard asks for them at step [5/8].
 
-After onboarding, four fixes are required due to bugs and Landlock filesystem restrictions in the current openclaw version.
+After onboarding, five fixes are required due to bugs and Landlock filesystem restrictions in the current openclaw version.
 
 > ⚠️ **VPN**: Disconnect any VPN before starting — VPNs commonly SNI-filter `api.telegram.org`.
-> ⚠️ All four fixes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ All five fixes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
 
 Run from the **host**, in the repo root:
 
@@ -256,25 +303,16 @@ source .env && ./scripts/telegram-setup.sh
 <details>
 <summary>Why each fix is needed</summary>
 
-**Fix 1 — Bot token**: openclaw stores the token as `openshell:resolve:env:TELEGRAM_BOT_TOKEN` after onboarding. As of v2026.4.10, this placeholder is not resolved at runtime — the literal string gets sent to Telegram, returning 404.
+**Fix 1 — Policy**: The full sandbox policy must be applied after onboarding (Telegram network rules, SearXNG rules, etc.).
 
-**Fix 2 — Telegram DNS**: The sandbox `/etc/resolv.conf` nameserver (`10.200.0.1`) has no DNS on port 53 — all queries time out. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; if DNS fails, it blocks. Adding the hostname to `/etc/hosts` bypasses this check.
+**Fix 2 — Bot token**: openclaw stores the token as `openshell:resolve:env:TELEGRAM_BOT_TOKEN` after onboarding. As of v2026.4.10, this placeholder is not resolved at runtime — the literal string gets sent to Telegram, returning 404.
 
-**Fix 3 — Credentials dir**: `openclaw pairing list telegram` writes to `/sandbox/.openclaw/credentials/`. That path is read-only under Landlock. Symlinking to `/sandbox/.openclaw-data/credentials/` (already read-write) fixes it.
+**Fix 3 — Telegram DNS**: The sandbox `/etc/resolv.conf` nameserver (`10.200.0.1`) has no DNS on port 53 — all queries time out. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; if DNS fails, it blocks. Adding the hostname to `/etc/hosts` bypasses this check.
 
-**Fix 4 — Telegram state dir**: The gateway writes update offsets to `/sandbox/.openclaw/telegram/`. Without the symlink it logs `failed to persist update offset` — messages still arrive but may be re-delivered after a gateway restart.
-</details>
-
-<details>
-<summary>Why each fix is needed</summary>
-
-**Fix 1 — Bot token**: openclaw stores the token as `openshell:resolve:env:TELEGRAM_BOT_TOKEN` after onboarding. As of v2026.4.10, this placeholder is not resolved at runtime — the literal string gets sent to Telegram, returning 404.
-
-**Fix 2 — Telegram DNS**: The sandbox `/etc/resolv.conf` nameserver (`10.200.0.1`) has no DNS on port 53 — all queries time out. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; if DNS fails, it blocks. Adding the hostname to `/etc/hosts` bypasses this check.
-
-**Fix 3 — Credentials dir**: `openclaw pairing list telegram` writes to `/sandbox/.openclaw/credentials/`. That path is read-only under Landlock. Symlinking to `/sandbox/.openclaw-data/credentials/` (already read-write) fixes it.
-
-**Fix 4 — Telegram state dir**: The gateway writes update offsets to `/sandbox/.openclaw/telegram/`. Without the symlink it logs `failed to persist update offset` — messages still arrive but may be re-delivered after a gateway restart.
+**Fix 4 — Writable dirs/files**: openclaw tries to write to several paths under `/sandbox/.openclaw/` (read-only via Landlock). Fixed by symlinking to `/sandbox/.openclaw-data/` (read-write):
+- `credentials/` — needed for `openclaw pairing list telegram`; without it EACCES on pairing
+- `telegram/` — gateway writes update offsets here; without it, messages may re-deliver after restart
+- `workspace-state.json` — gateway writes agent workspace state here; without it, **every message fails** with EACCES and the bot sends error responses instead of answers
 </details>
 
 ### 7e. Start the openclaw gateway
@@ -462,6 +500,7 @@ Run the [7d consolidated script](#7d-post-onboard-telegram-setup-required-after-
 | Connection blocked by mechanistic_mapper | Sandbox DNS can't resolve `api.telegram.org` | Fix 3 in §7d script |
 | `openclaw pairing list` EACCES | Missing writable credentials dir | Fix 4 in §7d script |
 | `failed to persist update offset` | Missing writable telegram state dir | Fix 4 in §7d script |
+| Bot replies "something went wrong" to every message | `workspace-state.json` EACCES (missing writable file symlink) | Fix 4 in §7d script |
 | All connections blocked after `openshell term` | Term approvals create broken `allow_*` override policies | Re-apply full policy |
 | Telegram unreachable from host | VPN SNI-filters `api.telegram.org` | Disconnect VPN |
 
