@@ -12,6 +12,7 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 - ✅ **SearXNG as a dedicated tool** — DONE 2026-04-12. `web_fetch` blocked by openclaw SSRF layer for `.internal` domains. Final approach: `exec` + `curl` to `http://host.openshell.internal:8888/search?q=...&format=json`. Agent taught via `TOOLS.md` in workspace (`/sandbox/.openclaw-data/workspace/TOOLS.md`). NOT solvable via plugin in v2026.3.11 — used workspace context injection instead.
 - ✅ **Disable/hide unusable `web_search` tool** — DONE 2026-04-12. `tools.deny: ["web_search"]` in `openclaw.json` (top-level key). Validated working.
 - ⏳ **Investigate native SearXNG integration** — Current approach (TOOLS.md injection + `exec`/curl) is a workaround. Check if newer openclaw versions support: (1) a `searxng` provider for `tools.web.search.provider`, (2) a SearXNG plugin, (3) `allowPrivateNetwork` or equivalent for `web_fetch`, or (4) a first-class custom tool/search provider API. Revisit when upgrading openclaw past v2026.3.11.
+- ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `telegram-setup.sh`, (3) whether newer openclaw/Landlock versions resolve this.
 - ⏳ **Policy builder/applier UI** — the current policy workflow (hand-editing YAML, running `openshell policy set`, knowing about full-replacement semantics, `allowed_ips` for internal IPs, etc.) is too complex for most users. Build a simple interface that lets users add/remove endpoints and applies the full policy file correctly.
 
 ## Documentation references
@@ -65,6 +66,27 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell openshell-0 -- 
 
 # Read sandbox openclaw config
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- cat /sandbox/.openclaw/openclaw.json
+```
+
+## Safe config edit pattern (avoid zeroing openclaw.json)
+**NEVER** pipe `cat openclaw.json | ... | cat > openclaw.json` in a single pipeline — it races and zeros the file.
+Always use a host-side temp file:
+```bash
+# 1. Read to host
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  cat /sandbox/.openclaw/openclaw.json > /tmp/oc.json
+
+# 2. Modify on host (example: add tools.deny)
+python3 -c "
+import json
+with open('/tmp/oc.json') as f: c = json.load(f)
+c.setdefault('tools',{})['deny'] = ['web_search']
+print(json.dumps(c,indent=2))
+" > /tmp/oc-updated.json
+
+# 3. Write back
+docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
+  sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc-updated.json
 ```
 
 ## Current environment state (as of 2026-04-12)
@@ -154,6 +176,24 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 ```
 Also added `/sandbox/.openclaw/workspace-state.json` to `read_write` in `policies/sandbox-policy.yaml`.
 > ⚠️ Not persistent — lost on sandbox rebuild. Now included in step [4/4] of `scripts/telegram-setup.sh`.
+
+**Note (2026-04-12)**: `agents.defaults.workspace` is now set (required for TOOLS.md injection). The symlink + policy `read_write` entry appears sufficient for openclaw to write workspace-state.json without EACCES. If EACCES returns after a rebuild, re-run `scripts/telegram-setup.sh` (step 4 creates the symlink).
+
+### `openclaw.json` zeroed out after config edit
+**Cause**: Reading and writing `openclaw.json` through the same pipeline races — `cat > openclaw.json` truncates the file before `cat openclaw.json` finishes reading. Symptom: file size becomes 0.
+
+**Fix**: Always use a host-side temp file. Read → modify on host → write back as separate commands (not a single pipeline). See "Safe config edit pattern" in the Useful debug commands section.
+
+**Recovery**: Use `openclaw.json.bak` (openclaw creates this automatically). See "openclaw.json got zeroed out" in the Troubleshooting section of README.md.
+
+### `session file locked (timeout 10000ms)` after a timeout
+**Cause**: A previous agent run timed out (e.g. LLM response too slow on qwen3:30b) and left a stale `.lock` file in `/sandbox/.openclaw-data/agents/main/sessions/`.
+
+**Fix**:
+```bash
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.lock && echo "Locks cleared"'
+```
 
 ### `failed to persist update offset: EACCES /sandbox/.openclaw/telegram` — RESOLVED as of 2026-04-12
 **Cause**: Same Landlock pattern — gateway tries to write update offsets to `/sandbox/.openclaw/telegram` (read-only path).
