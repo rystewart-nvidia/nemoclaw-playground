@@ -23,12 +23,14 @@ filesystem_policy:
     - /app
     - /etc
     - /var/log
+    - /sandbox
     - /sandbox/.openclaw
   read_write:
-    - /sandbox
     - /tmp
     - /dev/null
     - /sandbox/.openclaw-data
+    - /sandbox/.nemoclaw
+    - /sandbox
     - /sandbox/.openclaw/credentials
     - /sandbox/.openclaw/telegram
     - /sandbox/.openclaw/workspace-state.json
