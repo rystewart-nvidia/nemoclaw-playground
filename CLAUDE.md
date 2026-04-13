@@ -31,8 +31,7 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 - Channel messaging (Telegram, Discord) is configured during `nemoclaw onboard` or by writing to `openclaw.json` via kubectl exec — NOT via `nemoclaw start` (that's cloudflared tunnel only)
 - `nemoclaw start` = cloudflared tunnel. `nemoclaw status` = sandbox list + cloudflared. Neither reflects Telegram state.
 - Telegram status: `openclaw channels status` inside sandbox
-- Gateway must be started manually after config changes: `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &` inside sandbox (or use `./scripts/start-openclaw-gateway.sh` from host)
-- Pairing: only needed if `dmPolicy: pairing` — first DM generates a code → `openclaw pairing list telegram` → `openclaw pairing approve telegram <CODE>`. With `dmPolicy: allowlist` and user in `allowFrom`, DMs work without pairing.
+- Gateway is started automatically by `nemoclaw onboard`. If it stops, restart manually: `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &` inside sandbox
 
 ## Architecture note
 openclaw is NOT installed directly on the host. nemoclaw creates a Docker sandbox running an OpenShell gateway (which controls network, filesystem, and process access) with openclaw running inside it. All openclaw interaction goes through that sandbox.
@@ -100,7 +99,7 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 - **Telegram**: fully working — gateway running (mode:polling, @whiskey_papa_bot), bot responds to DMs; user ID `8362082345` in `allowFrom`
 - **SearXNG**: running via Docker Compose on host port **8888** (not 8080 — conflict with openshell cluster)
 - **Active policy**: v5 (applied via `post-onboard.sh` 2026-04-12)
-- **Scripts**: `scripts/post-onboard.sh` and `scripts/start-openclaw-gateway.sh` — run after every onboard
+- **Scripts**: `scripts/post-onboard.sh` — run after every onboard if using SearXNG (applies allowed_ips policy + Telegram DNS fix)
 
 ## What works
 - ✅ Basic chat: `openclaw agent --agent main --local -m "hi" --session-id test`
@@ -343,13 +342,10 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 
 Then start a new one:
 ```bash
-# Via SSH
 nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
-# Or from host:
-./scripts/start-openclaw-gateway.sh
 ```
 
-The `start-openclaw-gateway.sh` script already handles kill + restart but uses SIGTERM. If the gateway is stuck, use `kill -9` via kubectl as above.
+If the gateway is stuck, use `kill -9` via kubectl as above.
 
 ## SearXNG integration approach
 - SearXNG runs in Docker Compose on host port 8888

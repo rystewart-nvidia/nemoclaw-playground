@@ -121,7 +121,7 @@ When prompted:
 - **Inference provider** → choose `Local Ollama (localhost:11434)`
 - **Model** → pick from the list (your pulled models will appear)
 - **Brave Web Search** → `N` (we use SearXNG instead)
-- **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID
+- **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID (see [§7b](#7b-get-a-bot-token) and [§7c](#7c-get-your-chat-id) if you haven't done this yet)
 - **Sandbox name** → choose anything, e.g. `my-assistant`
 
 ### 3b. Rebuild an existing sandbox
@@ -134,7 +134,7 @@ nemoclaw onboard --recreate-sandbox --yes-i-accept-third-party-software
 ```
 
 > This command is **interactive** — `--non-interactive` mode requires `NVIDIA_API_KEY` and defaults to NIM, not ollama.
-> After rebuilding, re-run `./scripts/post-onboard.sh` and `./scripts/start-openclaw-gateway.sh`.
+> After rebuilding, re-run `./scripts/post-onboard.sh` if using SearXNG (see [§7d](#7d-post-onboard-setup-required-if-using-searxng)).
 
 Verify onboarding succeeded:
 ```bash
@@ -274,13 +274,13 @@ ALLOWED_CHAT_IDS=<your-telegram-user-id>
 
 > `ALLOWED_CHAT_IDS` must be set before running `post-onboard.sh` — the script injects it into `allowFrom` in the openclaw config. If it's not set, the bot will silently drop your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value (the bot token's numeric prefix instead of your user ID) — the setup script overwrites it.
 
-### 7d. Post-onboard setup (required after every onboard)
+### 7d. Post-onboard setup (required if using SearXNG)
 
-After onboarding, run the setup script. It handles everything in one shot — Telegram fixes, SearXNG config, and workspace setup.
+`nemoclaw onboard` starts the gateway automatically and Telegram works out of the box. The main reason to run this script is to apply the SearXNG network policy so the sandbox can reach your local SearXNG instance.
 
 > ⚠️ All changes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
 
-> 🚫 **Disconnect VPN before running this script.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts`. If VPN is on, it will write a VPN-intercepted IP — the gateway will connect but get a certificate for the wrong server (`TLS L7 relay error: UnknownIssuer`). Disconnect VPN first, then run the script.
+> 🚫 **Disconnect VPN before running this script.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts` as a safety net. If VPN is on, it will write a VPN-intercepted IP — the gateway will connect but get a certificate for the wrong server (`TLS L7 relay error: UnknownIssuer`). Disconnect VPN first, then run the script.
 
 **Host** (repo root):
 ```bash
@@ -292,14 +292,14 @@ After onboarding, run the setup script. It handles everything in one shot — Te
 <details>
 <summary>What each step does</summary>
 
-**Step 1 — Policy**: Applies the full sandbox policy (Telegram network rules, SearXNG rules, npm, pypi). `openshell policy set` replaces the entire policy — always use `policies/sandbox-policy.yaml`.
+**Step 1 — Policy**: Applies the full sandbox policy including the SearXNG `allowed_ips` rule. `openshell policy set` replaces the entire policy and reloads on the fly — always use `policies/sandbox-policy.yaml`.
 
 **Step 2 — Patch openclaw.json**: Three fixes in one write:
 - *Bot token*: openclaw stores the token as a literal placeholder string after onboarding — injects the real token from `.env`
 - *allowFrom*: nemoclaw onboard may set this to the bot token's numeric prefix instead of your Telegram user ID — overwrites from `ALLOWED_CHAT_IDS` in `.env`
 - *Agent config*: sets `tools.deny: [web_search]` (disables broken Brave Search) and `agents.defaults.workspace` (required for TOOLS.md injection)
 
-**Step 3 — Telegram DNS**: The sandbox nameserver (`10.200.0.1`) has no DNS on port 53. OpenShell's `mechanistic_mapper` resolves hostnames to verify they're not internal IPs; DNS failure = blocked connection. Adds a static `/etc/hosts` entry to bypass this.
+**Step 3 — Telegram DNS**: Adds a static `/etc/hosts` entry for `api.telegram.org` as a safety net. The sandbox nameserver has no DNS on port 53; if the IP isn't pre-resolved, OpenShell's `mechanistic_mapper` blocks the connection. Mainly protects against running the script with VPN on.
 
 **Step 4 — Writable symlinks**: Landlock marks `/sandbox/.openclaw` read-only. openclaw writes to several paths there at runtime — creates symlinks to the writable `/sandbox/.openclaw-data/`:
 - `credentials/` — needed for `openclaw pairing list telegram`
@@ -309,18 +309,7 @@ After onboarding, run the setup script. It handles everything in one shot — Te
 **Step 5 — SearXNG TOOLS.md**: Creates a `TOOLS.md` in the agent workspace teaching the agent to use `exec` + curl for web search. Temporary workaround until openclaw supports MCP (later versions).
 </details>
 
-### 7e. Start the openclaw gateway
-
-Complete the [7d setup script](#7d-post-onboard-telegram-setup-required-after-every-onboard) first, then:
-
-**Host:**
-```bash
-./scripts/start-openclaw-gateway.sh
-```
-
-The script starts the gateway and prints channel status. To confirm the bot is actively polling:
-
-**Host:**
+To confirm the gateway is polling after onboarding:
 ```bash
 openshell logs --tail
 # Expected: repeated L7_REQUEST ... l7_target=/bot.../getUpdates
@@ -331,35 +320,12 @@ openshell logs --tail
 > `/tmp/gateway.log` inside the sandbox only shows lifecycle events (errors, restarts) — not individual message polls.
 > Use `openclaw channels status` (inside sandbox) and `openshell logs --tail` (host) to verify Telegram.
 
-> **If `nemoclaw onboard` auto-started a gateway**: `start-openclaw-gateway.sh` will fail with "gateway already running". This is safe to ignore — the existing gateway is running. If it's not responding to messages, kill it and restart:
+> **If the gateway is not running** (e.g. after a sandbox pod restart): connect and start it manually:
 > ```bash
-> # Kill the existing gateway
-> docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
->   sh -c 'kill -9 146 2>/dev/null; true'
-> # Start fresh
-> ./scripts/start-openclaw-gateway.sh
+> nemoclaw my-assistant connect
+> # then inside the sandbox:
+> nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
 > ```
-> Note: the PID may differ — check with `nemoclaw connect` then look for the gateway process.
-
-> **If `nemoclaw connect` says "gateway not running, recovering..."**: nemoclaw detected the gateway is down and tried to restart it automatically. If recovery fails, it drops you into the sandbox shell — run `openclaw gateway run` there to start it in the foreground and see any errors.
-
-### 7f. Pair your Telegram account
-
-If `dmPolicy` is `allowlist` and your user ID is in `allowFrom` (set during onboarding), you can DM the bot directly — no pairing needed. If `dmPolicy` is `pairing`, the first DM generates a code:
-
-**Host:**
-```bash
-ssh ... 'openclaw pairing list telegram'
-```
-
-Approve it:
-
-**Host:**
-```bash
-ssh ... 'openclaw pairing approve telegram <CODE>'
-```
-
-Pairing codes expire after 1 hour.
 
 ---
 
@@ -487,18 +453,18 @@ Wait ~30 seconds for the k3s cluster to come back up, then verify:
 nemoclaw my-assistant status   # expect Phase: Ready
 ```
 
-Then re-apply all non-persistent fixes and start the gateway:
+Then re-apply non-persistent fixes (required if using SearXNG):
 
 ```bash
 # Host
 ./scripts/post-onboard.sh
-./scripts/start-openclaw-gateway.sh
 ```
 
-**Restart just the openclaw gateway (sandbox still running):**
+**Restart just the openclaw gateway (if it's not running):**
 ```bash
-# Host
-./scripts/start-openclaw-gateway.sh
+nemoclaw my-assistant connect
+# then inside the sandbox:
+nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
 ```
 
 **Full clean slate (destroy gateway + all sandboxes):**
@@ -709,7 +675,7 @@ print(json.dumps(c,indent=2))
 docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
   sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc-fixed.json
 ```
-Then restart the gateway: `./scripts/start-openclaw-gateway.sh`
+Then restart the gateway if needed: connect via `nemoclaw my-assistant connect` and run `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &`
 
 **Policy blocking requests:**
 ```bash

@@ -204,4 +204,4 @@ curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
 EOF
 
 echo ""
-echo "Done. Next: ./scripts/start-openclaw-gateway.sh to start the openclaw gateway."
+echo "Done."
