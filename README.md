@@ -56,11 +56,33 @@ curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
 
 The sandbox needs to reach Ollama over the Docker host gateway, so bind to `0.0.0.0`:
 
+**Mac (run directly):**
 ```bash
-# Mac / Linux / DGX Spark
 OLLAMA_HOST=0.0.0.0:11434 OLLAMA_KEEP_ALIVE=15m ollama serve
+```
 
-# WSL only (default binding is fine)
+**Linux/DGX (systemd service):**
+
+Ollama on Linux runs as a systemd service. Configure it via a drop-in override (this adds to the existing service config, not replace it):
+```bash
+sudo mkdir -p /etc/systemd/system/ollama.service.d/
+sudo tee /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_KEEP_ALIVE=15m"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+Verify it's listening on all interfaces:
+```bash
+ss -tlnp | grep 11434
+# Should show 0.0.0.0:11434 (not 127.0.0.1:11434)
+```
+
+**WSL only:**
+```bash
 OLLAMA_KEEP_ALIVE=15m ollama serve
 ```
 
@@ -179,23 +201,20 @@ curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
 
 If not running: `docker compose up -d` (host)
 
-### 6a. Verify the host gateway IP matches your environment
+### 6a. Host gateway IP
 
-The SearXNG policy entry whitelists the IP that `host.openshell.internal` resolves to inside the sandbox. This varies by platform — check it **before running `post-onboard.sh`**:
+The SearXNG policy entry whitelists the IP that `host.openshell.internal` resolves to inside the sandbox. `policies/sandbox-policy.yaml` already includes both known values:
 
+- `192.168.65.254` — macOS Docker Desktop
+- `172.17.0.1` — Linux / DGX Spark
+
+If you're on an unusual network setup and SearXNG isn't reachable, check the actual IP:
 ```bash
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
   getent hosts host.openshell.internal
-# Mac Docker Desktop: typically 192.168.65.254
-# Linux/DGX: likely 172.17.0.1 or similar
 ```
 
-Compare against what's in `policies/sandbox-policy.yaml`:
-```bash
-grep -A1 "allowed_ips" policies/sandbox-policy.yaml
-```
-
-If it differs, update the `allowed_ips` value under the `searxng` endpoint in `policies/sandbox-policy.yaml` before proceeding. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting for details.
+If it's something different, add it to `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml` and re-apply the policy. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting.
 
 > **How SearXNG gets wired up**: `post-onboard.sh` (step 7d) makes two config changes — (1) sets `tools.deny: [web_search]` in `openclaw.json` to hide the non-functional Brave Search tool, and (2) writes a `TOOLS.md` to the agent workspace instructing the agent to use `exec` + curl for any search request. This is a temporary workaround until openclaw supports MCP (added in versions after v2026.3.11), which will replace it with a registered `search` tool.
 
@@ -605,7 +624,7 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 grep -A1 "allowed_ips" policies/sandbox-policy.yaml
 ```
 
-If the IP differs, update the `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml`:
+The policy already includes both `192.168.65.254` (macOS) and `172.17.0.1` (Linux/DGX). If you're on a different network setup and neither matches, add the correct IP to `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml`:
 ```yaml
   searxng:
     endpoints:
@@ -613,10 +632,12 @@ If the IP differs, update the `allowed_ips` under the `searxng` endpoint in `pol
         port: 8888
         access: full
         allowed_ips:
-          - 192.168.65.254   # replace with actual gateway IP
+          - 192.168.65.254   # macOS Docker Desktop
+          - 172.17.0.1       # Linux/DGX
+          - x.x.x.x          # add your IP here
 ```
 
-Then re-apply the policy:
+Then re-apply:
 ```bash
 openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
 ```
@@ -742,7 +763,7 @@ Track upstream: [openclaw/openclaw#30338](https://github.com/openclaw/openclaw/i
 
 | Platform | Status |
 |---|---|
-| Mac M-series (ARM) | Testing |
+| Mac M-series (ARM) | Tested |
+| Linux x86 (NVIDIA GPU) | Tested |
 | DGX Spark (ARM + NVIDIA GPU) | Planned |
-| Linux x86 | Untested |
 | WSL2 | Untested |

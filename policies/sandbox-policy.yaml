@@ -10,7 +10,7 @@
 #   (copy network_policies section back here manually)
 #
 # Last applied: 2026-04-12 (version number resets on each new sandbox — always apply after onboard)
-# Note: allowed_ips in searxng is the Docker host gateway IP — may differ between environments (see README §6a)
+# Note: allowed_ips in searxng includes both macOS (192.168.65.254) and Linux/DGX (172.17.0.1) host gateway IPs
 
 version: 1
 
@@ -214,7 +214,8 @@ network_policies:
         port: 8888
         access: full
         allowed_ips:
-          - 192.168.65.254   # Docker Desktop host gateway (Mac); Linux/DGX may differ
+          - 192.168.65.254   # Docker Desktop host gateway (macOS)
+          - 172.17.0.1       # Docker bridge gateway (Linux/DGX)
     binaries:
       - { path: /usr/local/bin/openclaw }
       - { path: /usr/local/bin/node }
