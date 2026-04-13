@@ -179,11 +179,10 @@ curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
 
 If not running: `docker compose up -d` (host)
 
-### 6a. Verify policy IPs match your environment
+### 6a. Verify the host gateway IP matches your environment
 
-The policy file whitelists two internal IPs that vary by platform. Check them **before running `post-onboard.sh`** — if they're wrong, the sandbox won't be able to reach SearXNG.
+The SearXNG policy entry whitelists the IP that `host.openshell.internal` resolves to inside the sandbox. This varies by platform — check it **before running `post-onboard.sh`**:
 
-**Host gateway IP** (the IP `host.openshell.internal` resolves to inside the sandbox):
 ```bash
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
   getent hosts host.openshell.internal
@@ -191,20 +190,12 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 # Linux/DGX: likely 172.17.0.1 or similar
 ```
 
-**k3s ClusterIP** (the internal IP of the OpenShell service — stable within a running cluster, but changes on full reinstall):
+Compare against what's in `policies/sandbox-policy.yaml`:
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl get svc -n openshell
-# NAME        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
-# openshell   ClusterIP   10.43.168.186   <none>        8080/TCP   1d
+grep -A1 "allowed_ips" policies/sandbox-policy.yaml
 ```
 
-Compare both against what's in `policies/sandbox-policy.yaml`:
-```bash
-grep -E "allowed_ips" -A1 policies/sandbox-policy.yaml
-grep -E "k3s service" -B2 policies/sandbox-policy.yaml
-```
-
-If either differs, update `policies/sandbox-policy.yaml` before proceeding. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting for the exact YAML stanzas to update.
+If it differs, update the `allowed_ips` value under the `searxng` endpoint in `policies/sandbox-policy.yaml` before proceeding. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting for details.
 
 > **How SearXNG gets wired up**: `post-onboard.sh` (step 7d) makes two config changes — (1) sets `tools.deny: [web_search]` in `openclaw.json` to hide the non-functional Brave Search tool, and (2) writes a `TOOLS.md` to the agent workspace instructing the agent to use `exec` + curl for any search request. This is a temporary workaround until openclaw supports MCP (added in versions after v2026.3.11), which will replace it with a registered `search` tool.
 
@@ -268,8 +259,9 @@ ALLOWED_CHAT_IDS=<your-telegram-user-id>
 
 After onboarding, run the setup script. It handles everything in one shot — Telegram fixes, SearXNG config, and workspace setup.
 
-> ⚠️ **VPN**: Disconnect any VPN before starting — VPNs commonly SNI-filter `api.telegram.org`.
 > ⚠️ All changes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
+
+> 🚫 **Disconnect VPN before running this script.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts`. If VPN is on, it will write a VPN-intercepted IP — the gateway will connect but get a certificate for the wrong server (`TLS L7 relay error: UnknownIssuer`). Disconnect VPN first, then run the script.
 
 **Host** (repo root):
 ```bash
@@ -602,25 +594,19 @@ First confirm SearXNG itself is up:
 curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | head -c 200
 ```
 
-If that's fine, the issue is likely a mismatched IP in the policy. The policy whitelists two internal IPs that vary by platform — check them:
+If that's fine, the issue is likely a mismatched IP in the policy. Check what `host.openshell.internal` resolves to inside the sandbox:
 
 ```bash
-# What IP does host.openshell.internal resolve to inside the sandbox?
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
   getent hosts host.openshell.internal
 # Mac Docker Desktop: typically 192.168.65.254. Linux/DGX: likely 172.17.0.1 or similar.
 
-# What's the k3s ClusterIP for the OpenShell service?
-docker exec openshell-cluster-nemoclaw kubectl get svc -n openshell
-
-# What's currently in the policy file?
-grep -E "allowed_ips" -A1 policies/sandbox-policy.yaml
-grep -E "k3s service" -B2 policies/sandbox-policy.yaml
+# Compare against the policy file
+grep -A1 "allowed_ips" policies/sandbox-policy.yaml
 ```
 
-If either IP differs, update `policies/sandbox-policy.yaml`:
+If the IP differs, update the `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml`:
 ```yaml
-# SearXNG endpoint — update allowed_ips to match getent hosts output
   searxng:
     endpoints:
       - host: host.openshell.internal
@@ -628,14 +614,6 @@ If either IP differs, update `policies/sandbox-policy.yaml`:
         access: full
         allowed_ips:
           - 192.168.65.254   # replace with actual gateway IP
-
-# k3s service endpoint — update allowed_ips to match kubectl get svc output
-  allow_openshell_openshell_svc_cluster_local_8080:
-    endpoints:
-      - host: openshell.openshell.svc.cluster.local
-        port: 8080
-        allowed_ips:
-          - 10.43.168.186   # replace with actual ClusterIP
 ```
 
 Then re-apply the policy:
@@ -660,7 +638,7 @@ print('workspace:', c.get('agents',{}).get('defaults',{}).get('workspace','NOT S
 print('tools.deny:', c.get('tools',{}).get('deny','NOT SET'))
 "
 ```
-If workspace is `NOT SET`, re-run the config injection in §6c.
+If workspace is `NOT SET`, re-run `./scripts/post-onboard.sh`.
 
 **Agent fails with `session file locked`:**
 
@@ -737,6 +715,18 @@ Run the [7d consolidated script](#7d-post-onboard-telegram-setup-required-after-
 | Bot receives messages but never responds (no `sendMessage` in logs) | `allowFrom` set to wrong value — `nemoclaw onboard` may set it to the bot token's numeric prefix instead of your Telegram user ID | Re-run `post-onboard.sh` with `ALLOWED_CHAT_IDS` set in `.env` |
 | All connections blocked after `openshell term` | Term approvals create broken `allow_*` override policies | Re-apply full policy |
 | Telegram unreachable from host | VPN SNI-filters `api.telegram.org` | Disconnect VPN |
+| `TLS L7 relay error: UnknownIssuer` in openshell logs | `/etc/hosts` has wrong IP for `api.telegram.org` — was resolved with VPN on | See below |
+
+**`TLS L7 relay error: UnknownIssuer` — wrong IP in `/etc/hosts`:**
+
+The gateway connects to `api.telegram.org` but gets a certificate from the wrong server. Caused by running `post-onboard.sh` with VPN on — `dig` returned a VPN-intercepted IP which was written into the sandbox's `/etc/hosts`. Disconnect VPN, then fix the entry:
+
+```bash
+TGIP=$(dig +short api.telegram.org A | head -1)
+echo "Resolved: $TGIP"  # should be 149.154.x.x or 91.108.x.x
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  sh -c "grep -v 'api.telegram.org' /etc/hosts > /tmp/hosts.new && cp /tmp/hosts.new /etc/hosts && echo '$TGIP api.telegram.org' >> /etc/hosts"
+```
 
 **Policy must use `protocol: rest, tls: terminate`** (not `access: full`):
 ```bash

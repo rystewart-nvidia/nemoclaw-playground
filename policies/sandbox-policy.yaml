@@ -10,7 +10,7 @@
 #   (copy network_policies section back here manually)
 #
 # Last applied: 2026-04-12 (version number resets on each new sandbox — always apply after onboard)
-# Note: allowed_ips in allow_openshell_* is a k3s service IP — may differ between environments
+# Note: allowed_ips in searxng is the Docker host gateway IP — may differ between environments (see README §6a)
 
 version: 1
 
@@ -42,16 +42,6 @@ process:
   run_as_group: sandbox
 
 network_policies:
-  allow_openshell_openshell_svc_cluster_local_8080:
-    name: allow_openshell_openshell_svc_cluster_local_8080
-    endpoints:
-      - host: openshell.openshell.svc.cluster.local
-        port: 8080
-        allowed_ips:
-          - 10.43.168.186   # k3s service IP — verify with: kubectl get svc -n openshell
-    binaries:
-      - { path: /usr/bin/curl }
-
   claude_code:
     name: claude_code
     endpoints:
