@@ -191,7 +191,7 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell "$SANDBOX
 
 Use the `exec` tool with curl to search the web — do NOT use `web_fetch` (blocked for internal hostnames by openclaw SSRF protection).
 
-curl -sf "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
 
 Replace YOUR+QUERY with URL-encoded search terms (spaces → +).
 
@@ -200,7 +200,7 @@ IMPORTANT: the `number_of_results` field in the response is always 0 — ignore 
 Key fields in each results[] entry: title, url, content (snippet).
 
 Example — search and print top 5:
-curl -sf "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; r=json.load(sys.stdin)['results']; print(len(r),'results'); [print(x['title'], x['url']) for x in r[:5]]"
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; r=json.load(sys.stdin)['results']; print(len(r),'results'); [print(x['title'], x['url']) for x in r[:5]]"
 EOF
 
 echo ""

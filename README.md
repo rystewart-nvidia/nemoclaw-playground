@@ -58,11 +58,13 @@ The sandbox needs to reach Ollama over the Docker host gateway, so bind to `0.0.
 
 ```bash
 # Mac / Linux / DGX Spark
-OLLAMA_HOST=0.0.0.0:11434 ollama serve
+OLLAMA_HOST=0.0.0.0:11434 OLLAMA_KEEP_ALIVE=15m ollama serve
 
 # WSL only (default binding is fine)
-ollama serve
+OLLAMA_KEEP_ALIVE=15m ollama serve
 ```
+
+> `OLLAMA_KEEP_ALIVE=15m` keeps the model loaded for 15 minutes after the last request. The default is 5 minutes — too short for a Telegram bot with sporadic messages. Set to `-1` to never unload.
 
 Verify it's up:
 ```bash
@@ -77,7 +79,7 @@ docker compose up -d
 
 Verify it's up:
 ```bash
-curl -sf "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -20
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -100
 ```
 
 > **Note:** Port 8080 is used by the OpenShell gateway cluster. SearXNG runs on **8888**.
@@ -168,7 +170,7 @@ SearXNG should already be running from [Step 2b](#2b-searxng). Verify:
 
 **Host:**
 ```bash
-curl -sf "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -20
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -100
 ```
 
 If not running: `docker compose up -d` (host)
@@ -213,7 +215,7 @@ Tell the agent to execute the curl command directly:
 **Sandbox:**
 ```bash
 openclaw agent --agent main --local \
-  -m "Use the bash tool to run: curl -sf 'http://host.openshell.internal:8888/search?q=Airbnb+Bergamo&format=json' | python3 -m json.tool | head -100. Then summarise the results." \
+  -m "Use the bash tool to run: curl -sf -A 'Mozilla/5.0' 'http://host.openshell.internal:8888/search?q=Airbnb+Bergamo&format=json' | python3 -m json.tool | head -100. Then summarise the results." \
   --session-id search1
 ```
 
@@ -263,7 +265,7 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 
 This agent has a local SearXNG instance for web search. Use it with the `exec` tool via curl — **not** `web_fetch` (which blocks internal hostnames).
 
-curl -sf "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
 
 Replace `YOUR+QUERY` with a URL-encoded search query (spaces → `+` or `%20`).
 
@@ -272,7 +274,7 @@ The response is JSON. Key fields in each `results[]` entry:
 - `url` — page URL
 - `content` — snippet/summary
 
-Example: curl -sf "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; [print(r['"'"'title'"'"'], r['"'"'url'"'"'], r.get('"'"'content'"'"','')[:100]) for r in json.load(sys.stdin)['"'"'results'"'"'][:5]]"
+Example: curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; [print(r['"'"'title'"'"'], r['"'"'url'"'"'], r.get('"'"'content'"'"','')[:100]) for r in json.load(sys.stdin)['"'"'results'"'"'][:5]]"
 
 Do not use `web_fetch` for this URL — use `exec` + `curl` only.
 EOF
@@ -579,6 +581,12 @@ Shows blocked outbound requests in real-time and lets you approve them interacti
 
 > ⚠️ Do NOT use `openshell term` to approve Telegram connections — it creates an `allow_*` override policy that breaks TLS. Re-apply the full policy after any approval: `openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait`
 
+**Terminal 3 — SearXNG request log:**
+```bash
+docker compose logs -f searxng
+```
+Shows every search query hitting SearXNG, which engines handled it, and any errors (rate limits, blocked engines, etc.). Debug logging is enabled in `searxng/settings.yml` (`general.debug: true`) so you get per-engine request detail — useful for diagnosing why searches return empty or partial results.
+
 ---
 
 ## Troubleshooting
@@ -631,10 +639,10 @@ docker run --rm --add-host host.openshell.internal:host-gateway \
 **SearXNG not reachable:**
 ```bash
 # From host
-curl -sf "http://localhost:8888/search?q=test&format=json" | head -c 200
+curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | head -c 200
 
 # From inside sandbox (the path the agent uses)
-ssh ... 'curl -sf "http://host.openshell.internal:8888/search?q=test&format=json" | python3 -c "import json,sys; [print(r[\"title\"]) for r in json.load(sys.stdin)[\"results\"][:3]]"'
+ssh ... 'curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=test&format=json" | python3 -c "import json,sys; [print(r[\"title\"]) for r in json.load(sys.stdin)[\"results\"][:3]]"'
 
 # Reapply policy if needed
 openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait

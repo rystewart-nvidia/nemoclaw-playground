@@ -1,4 +1,12 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - duckduckgo
+      - bing
+
+general:
+  debug: true
 
 server:
   # Generate a real secret for production: openssl rand -hex 32
