@@ -31,8 +31,9 @@ Get [NemoClaw](https://github.com/NVIDIA/NemoClaw) running with local [Ollama](h
   ```bash
   # Mac
   brew install ollama
-  ollama pull qwen3:8b   # or qwen3:4b for less RAM, qwen3:14b for more quality
+  ollama pull <your-preferred-model>   # e.g. nemotron-cascade-2, qwen3.5:9b, gpt-oss:20b
   ```
+  Pull any model you like. If results are poor (slow responses, ignores tool calls), try a larger or different model.
   Linux/DGX: see [ollama.com/download](https://ollama.com/download)
 - **Mac only**: Xcode CLI tools
   ```bash
@@ -94,7 +95,7 @@ nemoclaw onboard
 
 When prompted:
 - **Inference provider** → choose `Local Ollama (localhost:11434)`
-- **Model** → pick from the list (your pulled models will appear), e.g. `qwen3:8b` or `qwen3:30b`
+- **Model** → pick from the list (your pulled models will appear)
 - **Brave Web Search** → `N` (we use SearXNG instead)
 - **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID
 - **Sandbox name** → choose anything, e.g. `my-assistant`
@@ -498,6 +499,36 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 ---
 
 ## Sandbox management
+
+**Restart the stopped sandbox:**
+
+The `openshell-cluster-nemoclaw` Docker container has no auto-restart policy — it must be started manually after a host reboot. The non-persistent fixes from `post-onboard.sh` (DNS, symlinks) are also lost on restart.
+
+```bash
+# Host
+docker start openshell-cluster-nemoclaw
+```
+
+Wait ~30 seconds for the k3s cluster to come back up, then verify:
+
+```bash
+# Host
+nemoclaw my-assistant status   # expect Phase: Ready
+```
+
+Then re-apply all non-persistent fixes and start the gateway:
+
+```bash
+# Host
+./scripts/post-onboard.sh
+./scripts/start-openclaw-gateway.sh
+```
+
+**Restart just the openclaw gateway (sandbox still running):**
+```bash
+# Host
+./scripts/start-openclaw-gateway.sh
+```
 
 **Full clean slate (destroy gateway + all sandboxes):**
 ```bash
