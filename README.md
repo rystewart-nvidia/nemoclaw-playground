@@ -144,6 +144,8 @@ openclaw tui
 
 **Expected**: the agent responds and walks through initial OpenClaw setup (asks what to call itself, etc.).
 
+> **Dashboard alternative**: You can also send messages and watch responses from the NemoClaw dashboard — see [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
+
 ---
 
 ## 5. Test Tool Calling
@@ -155,6 +157,8 @@ openclaw tui
 openclaw agent --agent main --local -m "What is today's date?" --session-id test2
 ```
 Expected: correct date returned via tool call.
+
+> **Dashboard alternative**: The NemoClaw dashboard shows each tool call and its result inline as the agent runs — useful for verifying tool use without parsing CLI output. See [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
 
 **Internet search** — requires SearXNG (see next section).
 
@@ -175,114 +179,34 @@ curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
 
 If not running: `docker compose up -d` (host)
 
-### 6a. Find the host gateway IP (required for policy)
+### 6a. Verify policy IPs match your environment
 
-OpenShell blocks connections to internal/RFC1918 addresses unless explicitly listed in `allowed_ips`. You need to know what IP `host.openshell.internal` resolves to in your sandbox:
+The policy file whitelists two internal IPs that vary by platform. Check them **before running `post-onboard.sh`** — if they're wrong, the sandbox won't be able to reach SearXNG.
 
-**Sandbox:**
-```bash
-getent hosts host.openshell.internal
-# e.g. returns: 192.168.65.254  host.docker.internal host.openshell.internal
-```
-
-> **Mac Docker Desktop**: typically `192.168.65.254`
-> **Linux/DGX**: likely `172.17.0.1` or similar — always verify with `getent hosts`
-
-Check what IP is currently in the policy file:
-
-**Host:**
-```bash
-grep -A1 "allowed_ips" policies/sandbox-policy.yaml
-```
-
-Update `policies/sandbox-policy.yaml` if the IP differs:
-```yaml
-  searxng:
-    endpoints:
-      - host: host.openshell.internal
-        port: 8888
-        access: full
-        allowed_ips:
-          - 192.168.65.254   # replace with your actual gateway IP
-```
-
-### 6b. Test internet search via agent
-
-> The network policy must be applied before this will work. It's applied automatically by `post-onboard.sh` in [Step 7d](#7d-post-onboard-telegram-setup-required-after-every-onboard) — complete that first, then come back here to test.
-
-Tell the agent to execute the curl command directly:
-
-**Sandbox:**
-```bash
-openclaw agent --agent main --local \
-  -m "Use the bash tool to run: curl -sf -A 'Mozilla/5.0' 'http://host.openshell.internal:8888/search?q=Airbnb+Bergamo&format=json' | python3 -m json.tool | head -100. Then summarise the results." \
-  --session-id search1
-```
-
-Once step 6c is configured and working, you can ask naturally instead:
-
-**Sandbox:**
-```bash
-openclaw agent --agent main --local \
-  -m "Search for Airbnbs in Bergamo" \
-  --session-id search1
-```
-
-> Note: use `bash` + curl, not `web_fetch`. OpenClaw's `web_fetch` blocks internal/private IPs
-> (SSRF protection). The `bash` tool can reach `host.openshell.internal` once the network policy allows it.
-
-### 6c. Configure agent to search automatically (without prompting)
-
-> ⚠️ **This is a temporary workaround.** The current approach teaches the agent to use SearXNG via a `TOOLS.md` context file + `exec` + curl. The proper solution is an MCP tool — openclaw adds MCP support in versions after v2026.3.11. This should be replaced with a registered `search` MCP tool once openclaw is upgraded.
-
-Two config changes make the agent use SearXNG automatically for any search request:
-
-**1. Disable the non-functional `web_search` tool** (Brave Search requires an API key we don't have):
-
-Add `"tools": {"deny": ["web_search"]}` as a **top-level key** in `openclaw.json`:
-
-**Host:**
-```bash
-# Read current config, inject tools.deny, write back
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  cat /sandbox/.openclaw/openclaw.json \
-  | python3 -c "
-import json,sys
-c=json.load(sys.stdin)
-c.setdefault('tools',{})['deny']=['web_search']
-print(json.dumps(c,indent=2))
-" | docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
-  sh -c 'cat > /sandbox/.openclaw/openclaw.json'
-```
-
-**2. Teach the agent how to use SearXNG** via `TOOLS.md` in the workspace:
-
-**Host:**
+**Host gateway IP** (the IP `host.openshell.internal` resolves to inside the sandbox):
 ```bash
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  sh -c 'cat > /sandbox/.openclaw-data/workspace/TOOLS.md' << '"'"'EOF'"'"'
-## Web Search: SearXNG
-
-This agent has a local SearXNG instance for web search. Use it with the `exec` tool via curl — **not** `web_fetch` (which blocks internal hostnames).
-
-curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=YOUR+QUERY&format=json"
-
-Replace `YOUR+QUERY` with a URL-encoded search query (spaces → `+` or `%20`).
-
-The response is JSON. Key fields in each `results[]` entry:
-- `title` — page title
-- `url` — page URL
-- `content` — snippet/summary
-
-Example: curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=python+async+best+practices&format=json" | python3 -c "import json,sys; [print(r['"'"'title'"'"'], r['"'"'url'"'"'], r.get('"'"'content'"'"','')[:100]) for r in json.load(sys.stdin)['"'"'results'"'"'][:5]]"
-
-Do not use `web_fetch` for this URL — use `exec` + `curl` only.
-EOF
+  getent hosts host.openshell.internal
+# Mac Docker Desktop: typically 192.168.65.254
+# Linux/DGX: likely 172.17.0.1 or similar
 ```
 
-> The `TOOLS.md` file lives at `/sandbox/.openclaw-data/workspace/TOOLS.md` (via the `.openclaw/workspace` symlink). openclaw injects it into the agent's context on every run.
+**k3s ClusterIP** (the internal IP of the OpenShell service — stable within a running cluster, but changes on full reinstall):
+```bash
+docker exec openshell-cluster-nemoclaw kubectl get svc -n openshell
+# NAME        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+# openshell   ClusterIP   10.43.168.186   <none>        8080/TCP   1d
+```
 
-After these changes, you can ask the bot "Find Airbnbs in Bergamo" and it will curl SearXNG automatically — no URL needed in the prompt.
+Compare both against what's in `policies/sandbox-policy.yaml`:
+```bash
+grep -E "allowed_ips" -A1 policies/sandbox-policy.yaml
+grep -E "k3s service" -B2 policies/sandbox-policy.yaml
+```
+
+If either differs, update `policies/sandbox-policy.yaml` before proceeding. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting for the exact YAML stanzas to update.
+
+> **How SearXNG gets wired up**: `post-onboard.sh` (step 7d) makes two config changes — (1) sets `tools.deny: [web_search]` in `openclaw.json` to hide the non-functional Brave Search tool, and (2) writes a `TOOLS.md` to the agent workspace instructing the agent to use `exec` + curl for any search request. This is a temporary workaround until openclaw supports MCP (added in versions after v2026.3.11), which will replace it with a registered `search` tool.
 
 ---
 
@@ -428,7 +352,22 @@ Pairing codes expire after 1 hour.
 
 ---
 
-## 8. Verify Telegram End-to-End
+## 8. Verify Everything Works
+
+### 8a. SearXNG
+
+**Sandbox:**
+```bash
+openclaw agent --agent main --local \
+  -m "Search for Airbnbs in Bergamo" \
+  --session-id search1
+```
+
+Expected: the agent uses the `bash` tool to curl SearXNG and returns results — no URL needed in the prompt.
+
+> **Dashboard alternative**: You can send the same queries from the NemoClaw dashboard and watch the curl tool call execute in real time — helpful for confirming SearXNG is being used. See [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
+
+### 8b. Telegram end-to-end
 
 Send these messages to your Telegram bot and confirm the responses:
 
@@ -497,6 +436,25 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 ```
 
 > Note: the sandbox pod name matches your sandbox name (e.g. `my-assistant`).
+
+### Dashboard
+
+At the end of onboarding, a tokenized Control UI URL is printed:
+
+```
+OpenClaw UI (tokenized URL; treat it like a password)
+Port 18789 must be forwarded before opening this URL.
+http://127.0.0.1:18789/#token=<token>
+```
+
+Open that URL in your browser to access the NemoClaw dashboard. From the dashboard you can:
+- Send messages to the agent directly (no CLI needed)
+- Watch tool calls and their results inline as the agent runs
+- Review conversation history
+
+The token is tied to this sandbox — keep it secret (it grants full UI access).
+
+> If the port isn't forwarded yet, it will show an "origin not allowed" or connection error until the dashboard is reachable.
 
 ---
 
@@ -636,16 +594,58 @@ docker run --rm --add-host host.openshell.internal:host-gateway \
   -sf http://host.openshell.internal:11434/api/tags
 ```
 
-**SearXNG not reachable:**
+**SearXNG not reachable from sandbox:**
+
+First confirm SearXNG itself is up:
 ```bash
 # From host
 curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | head -c 200
+```
 
-# From inside sandbox (the path the agent uses)
-ssh ... 'curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=test&format=json" | python3 -c "import json,sys; [print(r[\"title\"]) for r in json.load(sys.stdin)[\"results\"][:3]]"'
+If that's fine, the issue is likely a mismatched IP in the policy. The policy whitelists two internal IPs that vary by platform — check them:
 
-# Reapply policy if needed
+```bash
+# What IP does host.openshell.internal resolve to inside the sandbox?
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+  getent hosts host.openshell.internal
+# Mac Docker Desktop: typically 192.168.65.254. Linux/DGX: likely 172.17.0.1 or similar.
+
+# What's the k3s ClusterIP for the OpenShell service?
+docker exec openshell-cluster-nemoclaw kubectl get svc -n openshell
+
+# What's currently in the policy file?
+grep -E "allowed_ips" -A1 policies/sandbox-policy.yaml
+grep -E "k3s service" -B2 policies/sandbox-policy.yaml
+```
+
+If either IP differs, update `policies/sandbox-policy.yaml`:
+```yaml
+# SearXNG endpoint — update allowed_ips to match getent hosts output
+  searxng:
+    endpoints:
+      - host: host.openshell.internal
+        port: 8888
+        access: full
+        allowed_ips:
+          - 192.168.65.254   # replace with actual gateway IP
+
+# k3s service endpoint — update allowed_ips to match kubectl get svc output
+  allow_openshell_openshell_svc_cluster_local_8080:
+    endpoints:
+      - host: openshell.openshell.svc.cluster.local
+        port: 8080
+        allowed_ips:
+          - 10.43.168.186   # replace with actual ClusterIP
+```
+
+Then re-apply the policy:
+```bash
 openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
+```
+
+Confirm it's now reachable from inside the sandbox:
+```bash
+ssh ... 'curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=test&format=json" | python3 -c "import json,sys; [print(r[\"title\"]) for r in json.load(sys.stdin)[\"results\"][:3]]"'
 ```
 
 **Agent isn't using SearXNG (uses `web_fetch` on google.com or similar instead):**
