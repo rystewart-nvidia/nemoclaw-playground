@@ -255,17 +255,7 @@ Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, follow
 
 ### 7c. Get your chat ID
 
-The easiest way is to message [@userinfobot](https://t.me/userinfobot) on Telegram — it replies with your user ID immediately.
-
-Alternatively, send any message to your new bot, then:
-
-**Host:**
-```bash
-source .env && curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" | python3 -m json.tool | grep -A3 '"chat"'
-```
-Find `"id": <your-id>` in the response.
-
-> ⚠️ `getUpdates` only returns messages the gateway hasn't consumed yet. Run this **before** starting the gateway, or the updates will already be gone.
+Message [@userinfobot](https://t.me/userinfobot) on Telegram — it replies with your user ID immediately.
 
 Add your ID to `ALLOWED_CHAT_IDS` in `.env`:
 ```
@@ -336,11 +326,11 @@ openshell logs --tail
 **Sandbox:**
 ```bash
 openclaw agent --agent main --local \
-  -m "Search for Airbnbs in Bergamo" \
+  -m "Use the bash tool to run: curl -sf -A \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36\" \"http://host.openshell.internal:8888/search?q=Airbnbs+in+Bergamo&format=json\" | python3 -m json.tool | head -100. Then summarise the results." \
   --session-id search1
 ```
 
-Expected: the agent uses the `bash` tool to curl SearXNG and returns results — no URL needed in the prompt.
+Expected: agent runs the curl command via `bash`, gets JSON results from SearXNG, and summarises them.
 
 > **Dashboard alternative**: You can send the same queries from the NemoClaw dashboard and watch the curl tool call execute in real time — helpful for confirming SearXNG is being used. See [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
 
@@ -352,7 +342,7 @@ Send these messages to your Telegram bot and confirm the responses:
 |---|---|
 | `hi` | Agent responds (may walk through naming setup on first run) |
 | `What's today's date?` | Correct date from tool call |
-| `Find Airbnbs in Bergamo` | Search results via SearXNG |
+| `Use the bash tool to run: curl -sf -A \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36\" \"http://host.openshell.internal:8888/search?q=Airbnbs+in+Bergamo&format=json\" \| python3 -m json.tool \| head -100. Then summarise the results.` | Search results via SearXNG |
 
 ---
 
