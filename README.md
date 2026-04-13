@@ -266,7 +266,7 @@ cp example.env .env
 ```
 TELEGRAM_BOT_TOKEN=   # from BotFather
 SANDBOX_NAME=my-assistant
-ALLOWED_CHAT_IDS=     # your Telegram user ID (from @userinfobot)
+ALLOWED_CHAT_IDS=     # your Telegram user ID (from @userinfobot); comma-separated for multiple
 ```
 
 > Never commit `.env` — the `.gitignore` in this repo already excludes it.
