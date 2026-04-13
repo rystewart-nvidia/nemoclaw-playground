@@ -121,7 +121,7 @@ When prompted:
 - **Inference provider** → choose `Local Ollama (localhost:11434)`
 - **Model** → pick from the list (your pulled models will appear)
 - **Brave Web Search** → `N` (we use SearXNG instead)
-- **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID (see [§7b](#7b-get-a-bot-token) and [§7c](#7c-get-your-chat-id) if you haven't done this yet)
+- **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID (see [§7a](#7a-get-credentials-before-onboarding) if you haven't done this yet)
 - **Sandbox name** → choose anything, e.g. `my-assistant`
 
 ### 3b. Rebuild an existing sandbox
@@ -222,11 +222,41 @@ If it's something different, add it to `allowed_ips` under the `searxng` endpoin
 
 ## 7. Telegram Bridge
 
-### 7a. Configure secrets
+### 7a. Get credentials (before onboarding)
 
-Secrets are stored in a local `.env` file (gitignored). Copy the example and fill it in:
+Have these ready before running `nemoclaw onboard` — you'll be prompted for them interactively:
 
-**Host:**
+**Bot token**: message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, follow the prompts.
+
+**Your chat ID**: message [@userinfobot](https://t.me/userinfobot) on Telegram — it replies with your user ID immediately.
+
+### 7b. Verify Telegram is working (after onboarding)
+
+`nemoclaw onboard` configures Telegram and starts the gateway automatically. To confirm the bot is actively polling:
+
+```bash
+openshell logs --tail
+# Expected: repeated L7_REQUEST ... l7_target=/bot.../getUpdates
+```
+
+> `nemoclaw start` is for cloudflared tunnel only — it does NOT start the Telegram bot.
+> `nemoclaw stop` / `nemoclaw status` do not reflect Telegram channel status.
+> `/tmp/gateway.log` only shows lifecycle events — not individual polls.
+> Use `openclaw channels status` (inside sandbox) and `openshell logs --tail` (host) to verify Telegram.
+
+> **If the gateway is not running** (e.g. after a sandbox pod restart): connect and start it manually:
+> ```bash
+> nemoclaw my-assistant connect
+> # then inside the sandbox:
+> nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
+> ```
+
+### 7c. Post-onboard setup (SearXNG + Telegram fallback)
+
+Run this script if you're using SearXNG, or if Telegram isn't working after onboard (e.g. the bot ignores messages or the token wasn't resolved correctly). It applies the SearXNG network policy and fixes known openclaw config issues.
+
+**1. Create `.env`** (only needed for this script):
+
 ```bash
 cp example.env .env
 # edit .env and fill in your values
@@ -234,50 +264,26 @@ cp example.env .env
 
 `.env` contents:
 ```
-TELEGRAM_BOT_TOKEN=   # from BotFather (see below)
+TELEGRAM_BOT_TOKEN=   # from BotFather
 SANDBOX_NAME=my-assistant
-ALLOWED_CHAT_IDS=     # your Telegram chat ID (optional but recommended)
+ALLOWED_CHAT_IDS=     # your Telegram user ID (from @userinfobot)
 ```
 
-Load the variables into your shell before running any `nemoclaw` commands:
-
-**Host:**
-```bash
-source .env
-```
-
-> `source .env` only lasts for the current shell session. Run it again if you open a new terminal.
 > Never commit `.env` — the `.gitignore` in this repo already excludes it.
 
-### 7b. Get a bot token
+> `ALLOWED_CHAT_IDS` is injected into `allowFrom` in the openclaw config. If not set, the bot silently drops your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value — the script overwrites it.
 
-Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, follow the prompts. Copy the token into `.env`.
-
-### 7c. Get your chat ID
-
-Message [@userinfobot](https://t.me/userinfobot) on Telegram — it replies with your user ID immediately.
-
-Add your ID to `ALLOWED_CHAT_IDS` in `.env`:
-```
-ALLOWED_CHAT_IDS=<your-telegram-user-id>
-```
-
-> `ALLOWED_CHAT_IDS` must be set before running `post-onboard.sh` — the script injects it into `allowFrom` in the openclaw config. If it's not set, the bot will silently drop your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value (the bot token's numeric prefix instead of your user ID) — the setup script overwrites it.
-
-### 7d. Post-onboard setup (required if using SearXNG)
-
-`nemoclaw onboard` starts the gateway automatically and Telegram works out of the box. The main reason to run this script is to apply the SearXNG network policy so the sandbox can reach your local SearXNG instance.
+**2. Run the script:**
 
 > ⚠️ All changes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
 
-> 🚫 **Disconnect VPN before running this script.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts` as a safety net. If VPN is on, it will write a VPN-intercepted IP — the gateway will connect but get a certificate for the wrong server (`TLS L7 relay error: UnknownIssuer`). Disconnect VPN first, then run the script.
+> 🚫 **Disconnect VPN first.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts`. With VPN on it writes a wrong IP, causing `TLS L7 relay error: UnknownIssuer`.
 
-**Host** (repo root):
 ```bash
 ./scripts/post-onboard.sh
 ```
 
-> `openclaw configure` is blocked by Landlock inside the sandbox — the script uses `kubectl exec` to patch `openclaw.json` directly from the host.
+> `openclaw configure` is blocked by Landlock inside the sandbox — the script patches `openclaw.json` via `kubectl exec` from the host.
 
 <details>
 <summary>What each step does</summary>
@@ -298,24 +304,6 @@ ALLOWED_CHAT_IDS=<your-telegram-user-id>
 
 **Step 5 — SearXNG TOOLS.md**: Creates a `TOOLS.md` in the agent workspace teaching the agent to use `exec` + curl for web search. Temporary workaround until openclaw supports MCP (later versions).
 </details>
-
-To confirm the gateway is polling after onboarding:
-```bash
-openshell logs --tail
-# Expected: repeated L7_REQUEST ... l7_target=/bot.../getUpdates
-```
-
-> Note: `nemoclaw start` is for cloudflared tunnel only — it does NOT start the Telegram bot.
-> `nemoclaw stop` / `nemoclaw status` do not reflect Telegram channel status.
-> `/tmp/gateway.log` inside the sandbox only shows lifecycle events (errors, restarts) — not individual message polls.
-> Use `openclaw channels status` (inside sandbox) and `openshell logs --tail` (host) to verify Telegram.
-
-> **If the gateway is not running** (e.g. after a sandbox pod restart): connect and start it manually:
-> ```bash
-> nemoclaw my-assistant connect
-> # then inside the sandbox:
-> nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
-> ```
 
 ---
 
