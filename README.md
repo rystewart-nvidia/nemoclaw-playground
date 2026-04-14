@@ -37,14 +37,31 @@ cp example.env .env
 
 Edit `.env` and fill in:
 - `TELEGRAM_BOT_TOKEN` — from @BotFather
-- `ALLOWED_CHAT_IDS` — your Telegram user ID
+- `ALLOWED_CHAT_IDS` — your Telegram user ID (see options below)
 - `OLLAMA_MODEL` — model to use (default: `qwen3.5:9b`)
 
-To find your chat ID, send any message to your bot first, then run:
+**Option A — allowlist (recommended for personal use)**
+
+Set `ALLOWED_CHAT_IDS` to your Telegram user ID. Get it from [@userinfobot](https://t.me/userinfobot). Multiple IDs are comma-separated: `ALLOWED_CHAT_IDS=111111,222222`
+
+Only users in the list can message the bot. Unknown users are silently dropped.
+
+**Option B — pairing codes (no chat ID needed)**
+
+Leave `ALLOWED_CHAT_IDS` unset and edit `configure-openclaw.sh` to use `dmPolicy: pairing`:
+
 ```bash
-curl "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
-# Look for "from": { "id": <YOUR_CHAT_ID> }
+# in configure-openclaw.sh, replace the allowFrom loop and dmPolicy lines with:
+openclaw config set channels.telegram.dmPolicy pairing
 ```
+
+With pairing mode, the first DM from any user generates a code. Approve it from inside the sandbox:
+```bash
+openclaw pairing list telegram
+openclaw pairing approve telegram <CODE>
+```
+
+Pairing is useful when you want to add users dynamically or don't know chat IDs at setup time. The tradeoff: anyone who finds your bot's username can send a pairing request, so you need to actively approve codes.
 
 ### 3. Start SearXNG
 

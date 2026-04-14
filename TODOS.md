@@ -6,6 +6,8 @@ Open items from the openshell + openclaw migration.
 
 - [ ] **Move hardcoded config out of setup.sh** — `setup.sh` currently has the Ollama provider model list, SearXNG URL, and other config values embedded in the Python snippet. Move these to a tracked config file (e.g. `openclaw-config.json` at repo root) that `setup.sh` reads and merges into the sandbox's `openclaw.json`. This makes config changes version-controlled and eliminates the need to edit `setup.sh` directly.
 
+- [ ] **Investigate single-JSON openclaw config** — `configure-openclaw.sh` currently uses a mix of `openclaw config set` calls and a Python JSON patch to build the config piecemeal. Determine if openclaw supports loading a full `openclaw.json` from a file at setup time (e.g. `openclaw config import` or a `--config` flag), or if the entire config can be written directly to `/sandbox/.openclaw/openclaw.json` and picked up on gateway start. A tracked `openclaw-config.json` in the repo would replace all the individual `config set` calls, make the config version-controlled, and eliminate the Python patching workaround.
+
 ## Pending
 
 - [ ] **Run proof point tests** — ✅ Telegram responding, SearXNG working. Still need to confirm: (1) "hi" onboarding walks through questions, (2) date question triggers a tool call (not hardcoded text), (3) web search query logs in `docker compose logs -f searxng`. Update README with exact tested commands after.
