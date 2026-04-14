@@ -43,7 +43,10 @@ fi
 
 openclaw config set gateway.mode local
 openclaw config set channels.telegram.enabled true
-openclaw config set channels.telegram.allowFrom.0 "$ALLOWED_CHAT_IDS"
+IFS=',' read -ra _CHAT_ID_ARRAY <<< "$ALLOWED_CHAT_IDS"
+for _i in "${!_CHAT_ID_ARRAY[@]}"; do
+  openclaw config set "channels.telegram.allowFrom.$_i" "${_CHAT_ID_ARRAY[$_i]// /}"
+done
 openclaw config set channels.telegram.dmPolicy allowlist
 openclaw config set channels.telegram.botToken "$TELEGRAM_BOT_TOKEN"
 # Write Ollama provider config and SearXNG plugin in a single Python pass.

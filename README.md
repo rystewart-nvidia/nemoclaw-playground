@@ -167,27 +167,83 @@ Keep these running while using the assistant:
 | 1 | `openshell logs --tail` | Network activity — Telegram polling, SearXNG hits, policy blocks |
 | 2 | `docker compose logs -f searxng` | Confirm search queries are reaching SearXNG |
 
-## Sandbox Management
+## Lifecycle Management
+
+There are three independent layers to manage. They have a dependency order: openshell gateway → openshell sandbox → openclaw gateway.
+
+### Layer 1: openshell gateway (host)
+
+The openshell gateway is the host-level runtime — a Docker container that manages sandbox networking, filesystem policy, and SSH tunneling. Everything else depends on it.
+
+| When | Command |
+|---|---|
+| Initial setup / after host reboot | `openshell gateway start` |
+| Pause without losing state | `openshell gateway stop` |
+| Full wipe (removes all sandboxes too) | `openshell gateway destroy` |
+| Check status | `openshell gateway info` |
+
+> `openshell gateway stop` preserves sandboxes and state. `openshell gateway destroy` wipes everything — you'll need to recreate the sandbox from scratch.
+
+After a **host reboot**, the gateway doesn't start automatically. Run `openshell gateway start` before anything else.
+
+### Layer 2: openshell sandbox
+
+The sandbox is the isolated container where openclaw runs. It persists across gateway restarts (unless you destroy the gateway).
+
+| When | Command |
+|---|---|
+| Initial setup | `openshell sandbox create --name $SANDBOX_NAME --from Dockerfile --policy policies/sandbox-policy.yaml` |
+| Inspect | `openshell sandbox list` / `openshell sandbox status $SANDBOX_NAME` |
+| Interactive shell | `openshell sandbox connect $SANDBOX_NAME` |
+| Non-interactive SSH | `openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf && ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME '<cmd>'` |
+| Re-apply network policy | `openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait` |
+| Delete and recreate from scratch | `openshell sandbox delete $SANDBOX_NAME` then recreate |
+
+> **Filesystem and process policies** are locked at creation time. Only network policies can be hot-reloaded via `openshell policy set`.
+
+> Re-apply the policy after any `openshell term` approvals — they create `access: full` overrides that break Telegram TLS.
+
+### Layer 3: openclaw gateway (inside sandbox)
+
+The openclaw gateway is a process inside the sandbox that handles Telegram polling and agent dispatch. It's started by `run-setup.sh` / `configure-openclaw.sh` and must be restarted manually if it stops.
+
+**Start (or restart):**
+```bash
+source .env && bash run-setup.sh
+```
+
+Or restart just the gateway without re-running full setup:
+```bash
+source .env
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+  "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
+```
+
+**Check if running:**
+```bash
+openshell logs --tail
+# Look for repeated: L7_REQUEST ... api.telegram.org ... getUpdates
+```
+
+**View gateway logs:**
+```bash
+source .env
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
+```
+
+> The openclaw gateway must be restarted after: sandbox recreation, config changes to `openclaw.json`, or if Telegram stops responding.
+
+> `openshell gateway stop`/`start` does NOT automatically restart the openclaw gateway — you need to re-run setup or restart it manually.
+
+### After a host reboot
 
 ```bash
 source .env
-
-# List and inspect
-openshell sandbox list
-openshell sandbox status $SANDBOX_NAME
-
-# Connect interactively
-openshell sandbox connect $SANDBOX_NAME
-
-# SSH non-interactively (run-setup.sh saves the config to a tempfile — generate your own for ad hoc use)
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME '<command>'
-
-# Re-apply network policy (run after any openshell term approvals)
-openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
-
-# Full teardown
-openshell sandbox delete $SANDBOX_NAME
+openshell gateway start          # 1. bring the host runtime back up
+# wait ~10s for gateway to be ready
+bash run-setup.sh                # 2. restart the openclaw gateway (sandbox persists)
 ```
 
 ### Changing the Ollama model
