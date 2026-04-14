@@ -200,6 +200,24 @@ ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
   "openclaw config set agents.defaults.model.primary 'ollama/$OLLAMA_MODEL'"
 ```
 
+### Accessing the openclaw dashboard
+
+The openclaw canvas (dashboard) runs inside the sandbox at `http://127.0.0.1:18789/__openclaw__/canvas/`. Use `openshell forward` to tunnel it to the host:
+
+```bash
+source .env
+openshell forward start 18789 $SANDBOX_NAME -d
+```
+
+Then open [http://localhost:18789/__openclaw__/canvas/](http://localhost:18789/__openclaw__/canvas/) in your browser.
+
+To stop the forward:
+```bash
+openshell forward stop 18789
+```
+
+> The `-d` flag runs the forward in the background. `openshell forward list` shows active forwards.
+
 ### Restarting the gateway
 
 The gateway runs as a background process (`setsid`). To restart it:
