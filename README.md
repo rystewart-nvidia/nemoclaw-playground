@@ -1,713 +1,255 @@
-# NemoClaw + Ollama Setup Guide
+# OpenShell + OpenClaw Personal Assistant
 
-Get [NemoClaw](https://github.com/NVIDIA/NemoClaw) running with local [Ollama](https://ollama.com) inference, SearXNG for web search, then wire up a Telegram bot. Tested on Mac M-series; targets DGX Spark (ARM + NVIDIA GPU) next.
+An openshell sandbox running openclaw as a personal AI assistant, accessible via Telegram with SearXNG web search. Uses openclaw's native SearXNG plugin — no workarounds needed.
+
+**Architecture:** openshell runs on the host and manages the sandbox. openclaw runs inside the sandbox and handles Telegram messaging and tool use. SearXNG runs on the host via Docker and is reachable inside the sandbox at `host.openshell.internal:8888`.
 
 ## Reference Docs
 
-| Tool | Documentation |
+| | |
 |---|---|
-| NemoClaw CLI | https://docs.nvidia.com/nemoclaw/latest/reference/commands.html |
-| OpenClaw CLI | https://docs.openclaw.ai/cli |
-| OpenClaw Channels | https://docs.openclaw.ai/channels/index |
+| OpenShell | https://github.com/NVIDIA/OpenShell |
+| OpenClaw docs | https://docs.openclaw.ai/ |
 | OpenClaw Telegram | https://docs.openclaw.ai/channels/telegram |
-| OpenShell | https://docs.nvidia.com/openshell/latest/get-started |
-
-## Which CLI does what
-
-| CLI | Runs on | Responsibility |
-|---|---|---|
-| `nemoclaw` | Host | Create/manage sandboxes, apply policies, start tunnel/services, onboard |
-| `openshell` | Host | Inspect sandboxes, set network/filesystem policy, view logs, SSH config |
-| `openclaw` | Inside sandbox | Run agents, configure channels/plugins, manage sessions, TUI |
-
-> `openclaw` is NOT installed on the host. All `openclaw` commands run inside the sandbox — either interactively via `nemoclaw <name> connect`, or non-interactively via the SSH pattern in [Connecting to the sandbox](#connecting-to-the-sandbox).
-
----
+| OpenClaw SearXNG | https://docs.openclaw.ai/tools/searxng-search |
 
 ## Prerequisites
 
-- **Docker** — [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Mac) or native Docker (Linux/DGX)
-- **Ollama** — installed and a model pulled
-  ```bash
-  # Mac
-  brew install ollama
-  ollama pull <your-preferred-model>   # e.g. nemotron-cascade-2, qwen3.5:9b, gpt-oss:20b
-  ```
-  Pull any model you like. If results are poor (slow responses, ignores tool calls), try a larger or different model.
-  Linux/DGX: see [ollama.com/download](https://ollama.com/download)
-- **Mac only**: Xcode CLI tools
-  ```bash
-  xcode-select --install
-  ```
+- Docker (Docker Desktop on Mac, native Docker on Linux)
+- openshell installed on the host
+- A Telegram bot token — create one via [@BotFather](https://t.me/BotFather) (`/newbot`)
+- Your Telegram chat ID (see step 2)
+- Ollama running on the host with a model pulled (default: `qwen3.5:9b`)
 
----
+## Setup
 
-## 1. Install NemoClaw
+### 1. Install openshell
 
 ```bash
-curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
 ```
 
----
+### 2. Configure credentials
 
-## 2. Start services
-
-### 2a. Ollama (host-accessible for sandbox)
-
-The sandbox needs to reach Ollama over the Docker host gateway, so bind to `0.0.0.0`:
-
-**Mac (run directly):**
 ```bash
-OLLAMA_HOST=0.0.0.0:11434 OLLAMA_KEEP_ALIVE=15m ollama serve
+cp example.env .env
 ```
 
-**Linux/DGX (systemd service):**
+Edit `.env` and fill in:
+- `TELEGRAM_BOT_TOKEN` — from @BotFather
+- `ALLOWED_CHAT_IDS` — your Telegram user ID
+- `OLLAMA_MODEL` — model to use (default: `qwen3.5:9b`)
 
-Ollama on Linux runs as a systemd service. Configure it via a drop-in override (this adds to the existing service config, not replace it):
+To find your chat ID, send any message to your bot first, then run:
 ```bash
-sudo mkdir -p /etc/systemd/system/ollama.service.d/
-sudo tee /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0"
-Environment="OLLAMA_KEEP_ALIVE=15m"
-EOF
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
+# Look for "from": { "id": <YOUR_CHAT_ID> }
 ```
 
-Verify it's listening on all interfaces:
-```bash
-ss -tlnp | grep 11434
-# Should show 0.0.0.0:11434 (not 127.0.0.1:11434)
-```
-
-**WSL only:**
-```bash
-OLLAMA_KEEP_ALIVE=15m ollama serve
-```
-
-> `OLLAMA_KEEP_ALIVE=15m` keeps the model loaded for 15 minutes after the last request. The default is 5 minutes — too short for a Telegram bot with sporadic messages. Set to `-1` to never unload.
-
-Verify it's up:
-```bash
-curl -sf http://localhost:11434/api/tags
-```
-
-### 2b. SearXNG
+### 3. Start SearXNG
 
 ```bash
 docker compose up -d
 ```
 
-Verify it's up:
+Verify it's working (wait a few seconds for startup):
 ```bash
-curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -100
+curl -sf -A "Mozilla/5.0" "http://localhost:8888/search?q=test&format=json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(f'OK — {len(r[\"results\"])} results')"
 ```
 
-> **Note:** Port 8080 is used by the OpenShell gateway cluster. SearXNG runs on **8888**.
+### 4. Pull Ollama model
 
----
-
-## 3. Onboard
-
-### 3a. First-time onboard
-
-**Host:**
 ```bash
-nemoclaw onboard
+ollama pull qwen3.5:9b
+# Or whatever OLLAMA_MODEL is set to in your .env
 ```
 
-When prompted:
-- **Inference provider** → choose `Local Ollama (localhost:11434)`
-- **Model** → pick from the list (your pulled models will appear)
-- **Brave Web Search** → `N` (we use SearXNG instead)
-- **Messaging channels** → toggle Telegram and paste your bot token + Telegram user ID (see [§7a](#7a-get-credentials-before-onboarding) if you haven't done this yet)
-- **Sandbox name** → choose anything, e.g. `my-assistant`
+### 5. Build sandbox image and create sandbox
 
-### 3b. Rebuild an existing sandbox
+The custom Dockerfile (at repo root) extends the openclaw base image with `dnsutils` (needed for Telegram DNS fix) and pins `openclaw@latest`.
 
-Use this to switch models, upgrade openclaw, or re-wire Telegram:
-
-**Host:**
 ```bash
-nemoclaw onboard --recreate-sandbox --yes-i-accept-third-party-software
+source .env
+openshell sandbox create \
+  --name $SANDBOX_NAME \
+  --from Dockerfile \
+  --policy policies/sandbox-policy.yaml
 ```
 
-> This command is **interactive** — `--non-interactive` mode requires `NVIDIA_API_KEY` and defaults to NIM, not ollama.
-> After rebuilding, re-run `./scripts/post-onboard.sh` if using SearXNG (see [§7d](#7d-post-onboard-setup-required-if-using-searxng)).
+> **Note:** Filesystem and process policies are locked at sandbox creation time. Network policies can be hot-reloaded at any time with `openshell policy set`.
 
-Verify onboarding succeeded:
+### 6. Configure openclaw
+
+`configure-openclaw.sh` (copied into the sandbox image at `/usr/local/bin/configure-openclaw`) configures openclaw and starts the gateway. `run-setup.sh` is the host-side wrapper that handles SSH config generation and IP resolution automatically.
+
+#### Option A — run-setup.sh (recommended, scriptable from host)
+
 ```bash
-nemoclaw list
-docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
+bash run-setup.sh
 ```
 
-Expected: your sandbox appears in `nemoclaw list` and `openshell-cluster-nemoclaw` is running in Docker.
+This script:
+1. Generates an SSH config for the sandbox via `openshell sandbox ssh-config`
+2. Resolves `api.telegram.org` IP on the host (the sandbox nameserver has no external DNS)
+3. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
+4. SSHes into the sandbox and runs the uploaded script with all required env vars
 
----
+`openshell sandbox ssh-config` outputs an SSH `Host` block with a `ProxyCommand` that routes traffic through the openshell runtime. The host alias is always `openshell-<sandbox-name>`.
 
-## 4. Test Chat
+> **Note:** `configure-openclaw.sh` is also baked into the image at `/usr/local/bin/configure-openclaw` by the Dockerfile. `run-setup.sh` uploads the repo version each time, so you only need to rebuild the image if the base image or installed packages change.
 
-Connect interactively:
+#### Option B — Interactive (shell session)
 
-**Host:**
 ```bash
-nemoclaw my-assistant connect
+source .env
+# Resolve Telegram IP on the host first (required — sandbox nameserver has no external DNS)
+TELEGRAM_IP=$(dig +short api.telegram.org A | grep -m1 '^[0-9]')
+openshell sandbox connect $SANDBOX_NAME
+# You are now inside the sandbox shell. Export all required vars, then run setup:
+export TELEGRAM_BOT_TOKEN="<your-token>"
+export ALLOWED_CHAT_IDS="<your-chat-id>"
+export OLLAMA_MODEL="qwen3.5:9b"
+export TELEGRAM_IP="<ip-from-above>"
+bash /usr/local/bin/configure-openclaw
 ```
 
-Then run a message:
+#### Verify setup completed
 
-**Sandbox:**
-```bash
-openclaw agent --agent main --local -m "hi" --session-id test
-# or open the interactive TUI:
-openclaw tui
-```
-
-**Expected**: the agent responds and walks through initial OpenClaw setup (asks what to call itself, etc.).
-
-> **Dashboard alternative**: You can also send messages and watch responses from the NemoClaw dashboard — see [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
-
----
-
-## 5. Test Tool Calling
-
-**Date (no extra config needed)**
-
-**Sandbox:**
-```bash
-openclaw agent --agent main --local -m "What is today's date?" --session-id test2
-```
-Expected: correct date returned via tool call.
-
-> **Dashboard alternative**: The NemoClaw dashboard shows each tool call and its result inline as the agent runs — useful for verifying tool use without parsing CLI output. See [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
-
-**Internet search** — requires SearXNG (see next section).
-
----
-
-## 6. SearXNG Web Search
-
-> `web_search` in openclaw only supports Brave Search (API key required).
-> Instead, we run SearXNG locally and the agent calls it via the `bash` tool with curl — no API key needed.
-> Note: `web_fetch` is also blocked for internal IPs by openclaw's own SSRF protection, so use `bash` + curl.
-
-SearXNG should already be running from [Step 2b](#2b-searxng). Verify:
-
-**Host:**
-```bash
-curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | python3 -m json.tool | head -100
-```
-
-If not running: `docker compose up -d` (host)
-
-### 6a. Host gateway IP
-
-The SearXNG policy entry whitelists the IP that `host.openshell.internal` resolves to inside the sandbox. `policies/sandbox-policy.yaml` already includes both known values:
-
-- `192.168.65.254` — macOS Docker Desktop
-- `172.17.0.1` — Linux / DGX Spark
-
-If you're on an unusual network setup and SearXNG isn't reachable, check the actual IP:
-```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  getent hosts host.openshell.internal
-```
-
-If it's something different, add it to `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml` and re-apply the policy. See [SearXNG not reachable from sandbox](#searxng-not-reachable) in Troubleshooting.
-
-> **How SearXNG gets wired up**: `post-onboard.sh` (step 7d) makes two config changes — (1) sets `tools.deny: [web_search]` in `openclaw.json` to hide the non-functional Brave Search tool, and (2) writes a `TOOLS.md` to the agent workspace instructing the agent to use `exec` + curl for any search request. This is a temporary workaround until openclaw supports MCP (added in versions after v2026.3.11), which will replace it with a registered `search` tool.
-
----
-
-## 7. Telegram Bridge
-
-### 7a. Get credentials (before onboarding)
-
-Have these ready before running `nemoclaw onboard` — you'll be prompted for them interactively:
-
-**Bot token**: message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`, follow the prompts.
-
-**Your chat ID**: message [@userinfobot](https://t.me/userinfobot) on Telegram — it replies with your user ID immediately.
-
-### 7b. Verify Telegram is working (after onboarding)
-
-`nemoclaw onboard` configures Telegram and starts the gateway automatically. To confirm the bot is actively polling:
-
+Watch the gateway log to confirm Telegram polling started:
 ```bash
 openshell logs --tail
-# Expected: repeated L7_REQUEST ... l7_target=/bot.../getUpdates
+# Should show repeated outbound requests to api.telegram.org:443 (getUpdates)
 ```
 
-> `nemoclaw start` is for cloudflared tunnel only — it does NOT start the Telegram bot.
-> `nemoclaw stop` / `nemoclaw status` do not reflect Telegram channel status.
-> `/tmp/gateway.log` only shows lifecycle events — not individual polls.
-> Use `openclaw channels status` (inside sandbox) and `openshell logs --tail` (host) to verify Telegram.
+Or from inside the sandbox:
+```bash
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -20 /tmp/gateway.log"
+```
 
-> **If the gateway is not running** (e.g. after a sandbox pod restart): connect and start it manually:
-> ```bash
-> nemoclaw my-assistant connect
-> # then inside the sandbox:
-> nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
-> ```
+### 7. Apply sandbox policy (if not applied at creation)
 
-### 7c. Post-onboard setup (SearXNG + Telegram fallback)
-
-Run this script if you're using SearXNG, or if Telegram isn't working after onboard (e.g. the bot ignores messages or the token wasn't resolved correctly). It applies the SearXNG network policy and fixes known openclaw config issues.
-
-**1. Create `.env`** (only needed for this script):
+The `--policy` flag in step 5 applies the policy at creation. To re-apply after any changes:
 
 ```bash
-cp example.env .env
-# edit .env and fill in your values
+source .env
+openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
 ```
 
-`.env` contents:
-```
-TELEGRAM_BOT_TOKEN=   # from BotFather
-SANDBOX_NAME=my-assistant
-ALLOWED_CHAT_IDS=     # your Telegram user ID (from @userinfobot); comma-separated for multiple
-```
+> **Critical:** Do NOT use `openshell term` to approve Telegram connections. It creates an `access: full` rule that overrides the `tls: terminate` setting and breaks TLS. If you already did, re-apply the policy file immediately.
 
-> Never commit `.env` — the `.gitignore` in this repo already excludes it.
+## Testing
 
-> `ALLOWED_CHAT_IDS` is injected into `allowFrom` in the openclaw config. If not set, the bot silently drops your messages. `nemoclaw onboard` may set `allowFrom` to the wrong value — the script overwrites it.
+Run these in order to verify all three capabilities:
 
-**2. Run the script:**
+**1. Onboarding — send "hi" to your Telegram bot**
 
-> ⚠️ All changes are **not persistent** — re-run after any `nemoclaw onboard --recreate-sandbox`.
+Expected: the agent walks through a brief setup/onboarding conversation.
+On subsequent messages, it responds normally.
 
-> 🚫 **Disconnect VPN first.** The script resolves `api.telegram.org` and writes the IP into the sandbox's `/etc/hosts`. With VPN on it writes a wrong IP, causing `TLS L7 relay error: UnknownIssuer`.
+**2. Date tool call — ask "what is today's date?"**
+
+Expected: agent uses a tool call to retrieve the date (not hardcoded text).
+Verify via `openshell logs --tail` — you should see a tool invocation in the network log.
+
+**3. Web search — ask "search for recent news about AI agents"**
+
+Expected: agent calls the `web_search` tool, SearXNG returns results, agent summarizes them.
+Verify via `docker compose logs -f searxng` — you should see an inbound search query.
+The agent response should cite sources, not use shell/exec tool calls.
+
+## Recommended Terminals
+
+Keep these running while using the assistant:
+
+| Terminal | Command | Purpose |
+|---|---|---|
+| 1 | `openshell logs --tail` | Network activity — Telegram polling, SearXNG hits, policy blocks |
+| 2 | `docker compose logs -f searxng` | Confirm search queries are reaching SearXNG |
+
+## Sandbox Management
 
 ```bash
-./scripts/post-onboard.sh
+source .env
+
+# List and inspect
+openshell sandbox list
+openshell sandbox status $SANDBOX_NAME
+
+# Connect interactively
+openshell sandbox connect $SANDBOX_NAME
+
+# SSH non-interactively (run-setup.sh saves the config to a tempfile — generate your own for ad hoc use)
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME '<command>'
+
+# Re-apply network policy (run after any openshell term approvals)
+openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
+
+# Full teardown
+openshell sandbox delete $SANDBOX_NAME
 ```
 
-> `openclaw configure` is blocked by Landlock inside the sandbox — the script patches `openclaw.json` via `kubectl exec` from the host.
+### Changing the Ollama model
 
-<details>
-<summary>What each step does</summary>
-
-**Step 1 — Policy**: Applies the full sandbox policy including the SearXNG `allowed_ips` rule. `openshell policy set` replaces the entire policy and reloads on the fly — always use `policies/sandbox-policy.yaml`.
-
-**Step 2 — Patch openclaw.json**: Three fixes in one write:
-- *Bot token*: openclaw stores the token as a literal placeholder string after onboarding — injects the real token from `.env`
-- *allowFrom*: nemoclaw onboard may set this to the bot token's numeric prefix instead of your Telegram user ID — overwrites from `ALLOWED_CHAT_IDS` in `.env`
-- *Agent config*: sets `tools.deny: [web_search]` (disables broken Brave Search) and `agents.defaults.workspace` (required for TOOLS.md injection)
-
-**Step 3 — Telegram DNS**: Adds a static `/etc/hosts` entry for `api.telegram.org` as a safety net. The sandbox nameserver has no DNS on port 53; if the IP isn't pre-resolved, OpenShell's `mechanistic_mapper` blocks the connection. Mainly protects against running the script with VPN on.
-
-**Step 4 — Writable symlinks**: Landlock marks `/sandbox/.openclaw` read-only. openclaw writes to several paths there at runtime — creates symlinks to the writable `/sandbox/.openclaw-data/`:
-- `credentials/` — needed for `openclaw pairing list telegram`
-- `telegram/` — gateway writes update offsets here (prevents message re-delivery on restart)
-- `workspace-state.json` — gateway writes agent state here; missing = every message returns an error
-
-**Step 5 — SearXNG TOOLS.md**: Creates a `TOOLS.md` in the agent workspace teaching the agent to use `exec` + curl for web search. Temporary workaround until openclaw supports MCP (later versions).
-</details>
-
----
-
-## 8. Verify Everything Works
-
-### 8a. SearXNG
-
-**Sandbox:**
+Edit `.env` to update `OLLAMA_MODEL`, then reconfigure inside the sandbox:
 ```bash
-openclaw agent --agent main --local \
-  -m "Use the bash tool to run: curl -sf -A \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36\" \"http://host.openshell.internal:8888/search?q=Airbnbs+in+Bergamo&format=json\" | python3 -m json.tool | head -100. Then summarise the results." \
-  --session-id search1
+source .env
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+  "openclaw config set agents.defaults.model.primary 'ollama/$OLLAMA_MODEL'"
 ```
 
-Expected: agent runs the curl command via `bash`, gets JSON results from SearXNG, and summarises them.
+### Restarting the gateway
 
-> **Dashboard alternative**: You can send the same queries from the NemoClaw dashboard and watch the curl tool call execute in real time — helpful for confirming SearXNG is being used. See [the dashboard URL](#dashboard) in the Connecting to the sandbox section.
-
-### 8b. Telegram end-to-end
-
-Send these messages to your Telegram bot and confirm the responses:
-
-| Message | Expected |
-|---|---|
-| `hi` | Agent responds (may walk through naming setup on first run) |
-| `What's today's date?` | Correct date from tool call |
-| `Use the bash tool to run: curl -sf -A \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36\" \"http://host.openshell.internal:8888/search?q=Airbnbs+in+Bergamo&format=json\" \| python3 -m json.tool \| head -100. Then summarise the results.` | Search results via SearXNG |
-
----
-
-## Connecting to the sandbox
-
-openclaw runs **inside** the sandbox — not on the host. There are two ways to reach it.
-
-### Interactive shell
-
+The gateway runs as a background process (`setsid`). To restart it:
 ```bash
-nemoclaw my-assistant connect
+source .env
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+  "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
 ```
 
-This drops you into a shell inside the sandbox. From there you can run any openclaw command:
-
-```bash
-openclaw agent --agent main --local -m "hi" --session-id test
-openclaw tui
-```
-
-### Non-interactive (single command from host)
-
-Use SSH with the sandbox ProxyCommand. Get the exact ProxyCommand for your sandbox:
-
-```bash
-openshell sandbox ssh-config my-assistant
-```
-
-Then run commands without entering the sandbox:
-
-```bash
-ssh \
-  -o StrictHostKeyChecking=no \
-  -o UserKnownHostsFile=/dev/null \
-  -o GlobalKnownHostsFile=/dev/null \
-  -o LogLevel=ERROR \
-  -o "ProxyCommand=$(openshell sandbox ssh-config my-assistant | grep ProxyCommand | sed 's/.*ProxyCommand //')" \
-  -l sandbox localhost \
-  'openclaw agent --agent main --local -m "hi" --session-id test'
-```
-
-Or hardcode the ProxyCommand value (copy it from `openshell sandbox ssh-config my-assistant`) to avoid the subshell.
-
-### Direct kubectl exec (bypassing SSH)
-
-NemoClaw runs a k3s cluster inside `openshell-cluster-nemoclaw`. You can exec directly into the sandbox pod without going through the SSH tunnel — useful for debugging when SSH isn't sufficient:
-
-```bash
-# List sandbox pods
-docker exec openshell-cluster-nemoclaw kubectl get all -n openshell
-
-# Run a command directly in the sandbox pod
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- <command>
-
-# Read openclaw config
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  cat /sandbox/.openclaw/openclaw.json
-```
-
-> Note: the sandbox pod name matches your sandbox name (e.g. `my-assistant`).
-
-### Dashboard
-
-At the end of onboarding, a tokenized Control UI URL is printed:
-
-```
-OpenClaw UI (tokenized URL; treat it like a password)
-Port 18789 must be forwarded before opening this URL.
-http://127.0.0.1:18789/#token=<token>
-```
-
-Open that URL in your browser to access the NemoClaw dashboard. From the dashboard you can:
-- Send messages to the agent directly (no CLI needed)
-- Watch tool calls and their results inline as the agent runs
-- Review conversation history
-
-The token is tied to this sandbox — keep it secret (it grants full UI access).
-
-> If the port isn't forwarded yet, it will show an "origin not allowed" or connection error until the dashboard is reachable.
-
----
-
-## Sandbox management
-
-**Restart the stopped sandbox:**
-
-The `openshell-cluster-nemoclaw` Docker container has no auto-restart policy — it must be started manually after a host reboot. The non-persistent fixes from `post-onboard.sh` (DNS, symlinks) are also lost on restart.
-
-```bash
-# Host
-docker start openshell-cluster-nemoclaw
-```
-
-Wait ~30 seconds for the k3s cluster to come back up, then verify:
-
-```bash
-# Host
-nemoclaw my-assistant status   # expect Phase: Ready
-```
-
-Then re-apply non-persistent fixes (required if using SearXNG):
-
-```bash
-# Host
-./scripts/post-onboard.sh
-```
-
-**Restart just the openclaw gateway (if it's not running):**
-```bash
-nemoclaw my-assistant connect
-# then inside the sandbox:
-nohup openclaw gateway run > /tmp/gateway.log 2>&1 &
-```
-
-**Full clean slate (destroy gateway + all sandboxes):**
-```bash
-openshell gateway destroy   # destroys the openshell cluster Docker container + all sandboxes + state
-nemoclaw onboard            # creates a fresh gateway and sandbox
-```
-
-> `openshell gateway destroy` removes the `openshell-cluster-nemoclaw` Docker container and all k3s state, including any sandboxes (registered or not). `nemoclaw onboard` recreates the gateway as part of the onboarding flow. Use this when you want a completely clean environment.
-
-**Delete a sandbox (keep gateway running):**
-```bash
-nemoclaw my-assistant destroy        # prompts for confirmation
-nemoclaw my-assistant destroy --yes  # skip confirmation
-```
-
-**Delete an unregistered sandbox** (e.g. created by a different nemoclaw install — shows in `kubectl get all -n openshell` but not in `nemoclaw list`):
-```bash
-docker exec openshell-cluster-nemoclaw kubectl delete pod/<name> service/<name> -n openshell
-```
-
-**List all sandboxes (nemoclaw view):**
-```bash
-nemoclaw list
-```
-
-**List all sandboxes (k3s view, includes unregistered):**
-```bash
-docker exec openshell-cluster-nemoclaw kubectl get all -n openshell
-```
-
----
-
-## Recommended terminals
-
-Keep these two terminal sessions open whenever you are working with the sandbox:
-
-**Terminal 1 — live network log:**
-```bash
-openshell logs --tail
-```
-Shows every connection the sandbox makes — Telegram `getUpdates`/`sendMessage` polls, SearXNG requests, blocked connections. This is the primary signal for whether the gateway is healthy and whether requests are getting through.
-
-**Terminal 2 — interactive policy approvals:**
-```bash
-openshell term
-```
-Shows blocked outbound requests in real-time and lets you approve them interactively. Useful when adding new network destinations (npm packages, new APIs, etc.).
-
-> ⚠️ Do NOT use `openshell term` to approve Telegram connections — it creates an `allow_*` override policy that breaks TLS. Re-apply the full policy after any approval: `openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait`
-
-**Terminal 3 — SearXNG request log:**
-```bash
-docker compose logs -f searxng
-```
-Shows every search query hitting SearXNG, which engines handled it, and any errors (rate limits, blocked engines, etc.). Debug logging is enabled in `searxng/settings.yml` (`general.debug: true`) so you get per-engine request detail — useful for diagnosing why searches return empty or partial results.
-
----
+> **Why not `openclaw gateway install`?** The base image does not run systemd. The `install` command attempts to register a systemd service and fails. The `setsid` approach starts the gateway as a detached background process that survives the SSH session.
 
 ## Troubleshooting
 
-**Check gateway and Telegram status:**
+**Telegram not working / "Network request failed" in gateway log**
+This is usually a DNS issue. The sandbox nameserver has no external DNS, so openshell's hostname verifier can't resolve `api.telegram.org`. `configure-openclaw.sh` fixes this by writing a static `/etc/hosts` entry. Re-run `run-setup.sh` if it was skipped.
+
+**Telegram TLS error / `UnknownIssuer` in logs**
+Re-apply the policy file. This happens when `openshell term` creates an `access: full` override:
 ```bash
-# Is the gateway process running inside the sandbox?
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  ps aux | grep "openclaw gateway"
-
-# Is Telegram actively polling? (primary health check — look for getUpdates lines)
-openshell logs --tail
-# Expected: repeated lines like:
-# [sandbox] L7_REQUEST dst_host=api.telegram.org ... l7_target=/bot.../getUpdates
-
-# Full Telegram channel status (from host, non-interactive)
-ssh \
-  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  -o GlobalKnownHostsFile=/dev/null -o LogLevel=ERROR \
-  -o "ProxyCommand=$(openshell sandbox ssh-config my-assistant | grep ProxyCommand | sed 's/.*ProxyCommand //')" \
-  -l sandbox localhost \
-  'openclaw channels status'
-
-# Just see recent network activity (Telegram + SearXNG hits)
-openshell logs --tail | grep -E "api.telegram.org|host.openshell.internal"
+source .env && openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
 ```
 
-> `nemoclaw status` and `nemoclaw my-assistant status` do NOT show Telegram state.
-> `/tmp/gateway.log` only logs lifecycle events — not individual polls or messages.
-> The definitive Telegram health signal is `getUpdates` appearing in `openshell logs --tail`.
+**SearXNG not reachable from sandbox**
+Check the `allowed_ips` in `policies/sandbox-policy.yaml`. The correct host gateway IP depends on your platform:
+- macOS Docker Desktop: `192.168.65.254`
+- Linux / native Docker: `172.17.0.1`
 
-**Check sandbox health:**
+**Web search returns no results (but SearXNG logs show a request)**
+Check that `web_search` is not in a deny list in `openclaw.json` inside the sandbox:
 ```bash
-nemoclaw my-assistant status
-openshell logs --tail
-openshell logs --tail --source sandbox --level debug
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "openclaw config get tools"
 ```
 
-**Ollama not reachable from sandbox:**
+**Bot not responding / no `getUpdates` in logs**
 ```bash
-# Check host side
-curl -sf http://localhost:11434/api/tags
-
-# Check container can reach host
-docker run --rm --add-host host.openshell.internal:host-gateway \
-  curlimages/curl:8.10.1 \
-  -sf http://host.openshell.internal:11434/api/tags
-```
-
-**SearXNG not reachable from sandbox:**
-
-First confirm SearXNG itself is up:
-```bash
-# From host
-curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://localhost:8888/search?q=test&format=json" | head -c 200
-```
-
-If that's fine, the issue is likely a mismatched IP in the policy. Check what `host.openshell.internal` resolves to inside the sandbox:
-
-```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  getent hosts host.openshell.internal
-# Mac Docker Desktop: typically 192.168.65.254. Linux/DGX: likely 172.17.0.1 or similar.
-
-# Compare against the policy file
-grep -A1 "allowed_ips" policies/sandbox-policy.yaml
-```
-
-The policy already includes both `192.168.65.254` (macOS) and `172.17.0.1` (Linux/DGX). If you're on a different network setup and neither matches, add the correct IP to `allowed_ips` under the `searxng` endpoint in `policies/sandbox-policy.yaml`:
-```yaml
-  searxng:
-    endpoints:
-      - host: host.openshell.internal
-        port: 8888
-        access: full
-        allowed_ips:
-          - 192.168.65.254   # macOS Docker Desktop
-          - 172.17.0.1       # Linux/DGX
-          - x.x.x.x          # add your IP here
-```
-
-Then re-apply:
-```bash
-openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
-```
-
-Confirm it's now reachable from inside the sandbox:
-```bash
-ssh ... 'curl -sf -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36" "http://host.openshell.internal:8888/search?q=test&format=json" | python3 -c "import json,sys; [print(r[\"title\"]) for r in json.load(sys.stdin)[\"results\"][:3]]"'
-```
-
-**Agent isn't using SearXNG (uses `web_fetch` on google.com or similar instead):**
-
-This means `agents.defaults.workspace` isn't set, so TOOLS.md isn't being injected. Verify the config:
-```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  cat /sandbox/.openclaw/openclaw.json | python3 -c "
-import json,sys
-c=json.load(sys.stdin)
-print('workspace:', c.get('agents',{}).get('defaults',{}).get('workspace','NOT SET'))
-print('tools.deny:', c.get('tools',{}).get('deny','NOT SET'))
-"
-```
-If workspace is `NOT SET`, re-run `./scripts/post-onboard.sh`.
-
-**Agent fails with `session file locked`:**
-
-A previous session timed out and left a stale lock file. Clear it:
-```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.lock && echo "Locks cleared"'
-```
-
-**`openclaw.json` got zeroed out (empty file):**
-
-This happens if you read and write `openclaw.json` through the same pipeline — e.g. `cat openclaw.json | python3 ... | cat > openclaw.json`. The write truncates the file before the read completes.
-
-Always use a host-side temp file as an intermediate:
-```bash
-# Safe pattern — read to host, modify on host, write back
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  cat /sandbox/.openclaw/openclaw.json > /tmp/oc.json
-
-# modify /tmp/oc.json on host ...
-
-docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
-  sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc.json
-```
-
-To restore from backup (openclaw keeps `openclaw.json.bak`):
-```bash
-# Restore from backup, re-inject bot token, re-add customizations
 source .env
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  cat /sandbox/.openclaw/openclaw.json.bak > /tmp/oc-restore.json
-
-TOKEN="$TELEGRAM_BOT_TOKEN" python3 -c "
-import json,sys,os
-with open('/tmp/oc-restore.json') as f:
-    c = json.load(f)
-for acct in c['channels']['telegram'].get('accounts',{}).values():
-    if 'botToken' in acct:
-        acct['botToken'] = os.environ['TOKEN']
-c.get('channels',{}).get('defaults',{}).pop('configWrites', None)  # remove stale key
-if not c['channels'].get('defaults'): c['channels'].pop('defaults', None)
-c.setdefault('tools',{})['deny'] = ['web_search']
-c['agents']['defaults']['workspace'] = '/sandbox/.openclaw-data/workspace'
-print(json.dumps(c,indent=2))
-" > /tmp/oc-fixed.json
-
-docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
-  sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc-fixed.json
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
 ```
-Then restart the gateway if needed: connect via `nemoclaw my-assistant connect` and run `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &`
+If the gateway isn't running, see "Restarting the gateway" above.
 
-**Policy blocking requests:**
+**`model-pricing bootstrap failed: TypeError: fetch failed` in gateway log**
+Expected — openclaw tries to fetch model pricing from `openrouter.ai` which is not in the sandbox policy (intentionally). This warning is harmless and does not affect functionality.
+
+**Bot token rejected / "unauthorized" from Telegram**
+Verify no extra whitespace in the token value. If needed, regenerate via @BotFather and re-run setup.
+
+**`openclaw.json` was zeroed or corrupted**
+Re-run the full setup:
 ```bash
-openshell term   # approve blocked requests interactively
+source .env && bash run-setup.sh
 ```
-> ⚠️ Do NOT approve Telegram connections via `openshell term` — it creates an `allow_api_telegram_org_443` policy with `access: full` that overrides the named `telegram` policy and breaks TLS. If you already did, re-apply the full policy immediately:
-> ```bash
-> openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
-> ```
-
-**openclaw gateway fails:**
-
-Run the [7d consolidated script](#7d-post-onboard-telegram-setup-required-after-every-onboard) first — it covers the most common failures. For individual symptoms:
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `deleteWebhook` 404 loop | Bot token placeholder not resolved | Fix 2 in §7d script |
-| CONNECT tunnel fails / TLS drops | Policy using `access: full` | Fix 1 in §7d script (apply policy) |
-| HTTP returns 0 bytes silently | `enforcement: monitor` instead of `enforce` | Fix 1 in §7d script (apply policy) |
-| Connection blocked by mechanistic_mapper | Sandbox DNS can't resolve `api.telegram.org` | Fix 3 in §7d script |
-| `openclaw pairing list` EACCES | Missing writable credentials dir | Fix 4 in §7d script |
-| `failed to persist update offset` | Missing writable telegram state dir | Fix 4 in §7d script |
-| Bot replies "something went wrong" to every message | `workspace-state.json` EACCES (missing writable file symlink) | Fix 4 in §7d script |
-| Bot receives messages but never responds (no `sendMessage` in logs) | `allowFrom` set to wrong value — `nemoclaw onboard` may set it to the bot token's numeric prefix instead of your Telegram user ID | Re-run `post-onboard.sh` with `ALLOWED_CHAT_IDS` set in `.env` |
-| All connections blocked after `openshell term` | Term approvals create broken `allow_*` override policies | Re-apply full policy |
-| Telegram unreachable from host | VPN SNI-filters `api.telegram.org` | Disconnect VPN |
-| `TLS L7 relay error: UnknownIssuer` in openshell logs | `/etc/hosts` has wrong IP for `api.telegram.org` — was resolved with VPN on | See below |
-
-**`TLS L7 relay error: UnknownIssuer` — wrong IP in `/etc/hosts`:**
-
-The gateway connects to `api.telegram.org` but gets a certificate from the wrong server. Caused by running `post-onboard.sh` with VPN on — `dig` returned a VPN-intercepted IP which was written into the sandbox's `/etc/hosts`. Disconnect VPN, then fix the entry:
-
-```bash
-TGIP=$(dig +short api.telegram.org A | head -1)
-echo "Resolved: $TGIP"  # should be 149.154.x.x or 91.108.x.x
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
-  sh -c "grep -v 'api.telegram.org' /etc/hosts > /tmp/hosts.new && cp /tmp/hosts.new /etc/hosts && echo '$TGIP api.telegram.org' >> /etc/hosts"
-```
-
-**Policy must use `protocol: rest, tls: terminate`** (not `access: full`):
-```bash
-openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
-```
-> ⚠️ `openshell term` approvals create an `allow_api_telegram_org_443` policy with `access: full` that overrides this. Always re-apply the full policy after any `openshell term` approvals.
-
-Track upstream: [openclaw/openclaw#30338](https://github.com/openclaw/openclaw/issues/30338) and [openclaw/openclaw#33013](https://github.com/openclaw/openclaw/issues/33013).
-
----
-
-## Platforms
-
-| Platform | Status |
-|---|---|
-| Mac M-series (ARM) | Tested |
-| Linux x86 (NVIDIA GPU) | Tested |
-| DGX Spark (ARM + NVIDIA GPU) | Planned |
-| WSL2 | Untested |
