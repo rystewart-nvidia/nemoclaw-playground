@@ -8,6 +8,8 @@ Open items from the openshell + openclaw migration.
 
 - [ ] **Investigate single-JSON openclaw config** — `configure-openclaw.sh` currently uses a mix of `openclaw config set` calls and a Python JSON patch to build the config piecemeal. Determine if openclaw supports loading a full `openclaw.json` from a file at setup time (e.g. `openclaw config import` or a `--config` flag), or if the entire config can be written directly to `/sandbox/.openclaw/openclaw.json` and picked up on gateway start. A tracked `openclaw-config.json` in the repo would replace all the individual `config set` calls, make the config version-controlled, and eliminate the Python patching workaround.
 
+- [ ] **Pin dependency versions** — Currently `openclaw@latest` is installed in the Dockerfile and openshell/nemoclaw are installed via `curl | sh` with no version pins. This makes builds non-reproducible — a new openclaw release could break config schema, gateway behavior, or plugin APIs without warning. Pin at minimum: (1) `openclaw` in the Dockerfile (`npm install -g openclaw@<version>`), (2) openshell CLI version in install instructions and README, (3) consider pinning the base Docker image tag if openclaw publishes versioned images. Document the tested/known-good versions in README.
+
 ## Pending
 
 - [ ] **Run proof point tests** — ✅ Telegram responding, SearXNG working. Still need to confirm: (1) "hi" onboarding walks through questions, (2) date question triggers a tool call (not hardcoded text), (3) web search query logs in `docker compose logs -f searxng`. Update README with exact tested commands after.
