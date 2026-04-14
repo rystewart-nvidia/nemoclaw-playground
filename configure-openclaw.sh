@@ -20,12 +20,17 @@
 #   TELEGRAM_BOT_TOKEN  — from your .env file
 #   ALLOWED_CHAT_IDS    — your Telegram user ID
 #   OLLAMA_MODEL        — Ollama model to use (default: qwen3.5:9b)
+#   OLLAMA_CONTEXT_LENGTH — context window size in tokens (default: 131072 / 128k)
+#                           sets both openclaw's contextWindow (conversation budget) and
+#                           num_ctx passed to Ollama (GPU memory allocation). Must match
+#                           what Ollama is configured to support.
 #   TELEGRAM_IP         — IP for api.telegram.org, resolved on the host before running
 #                         (sandbox nameserver has no external DNS; run-setup.sh handles this)
 
 set -euo pipefail
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
+OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-131072}"
 
 # ---------------------------------------------------------------------------
 # [1/3] Configure openclaw
@@ -62,8 +67,8 @@ with open('/sandbox/.openclaw/openclaw.json') as f:
 config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
     'baseUrl': 'http://host.openshell.internal:11434',
     'api': 'ollama',
-    'request': {'allowPrivateNetwork': True},
-    'models': [{'id': '$OLLAMA_MODEL', 'name': '$OLLAMA_MODEL', 'api': 'ollama'}]
+    'request': {'allowPrivateNetwork': True, 'num_ctx': $OLLAMA_CONTEXT_LENGTH},
+    'models': [{'id': '$OLLAMA_MODEL', 'name': '$OLLAMA_MODEL', 'api': 'ollama', 'contextWindow': $OLLAMA_CONTEXT_LENGTH}]
 }
 config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ollama/$OLLAMA_MODEL'
 config.setdefault('plugins', {}).setdefault('entries', {})['searxng'] = {

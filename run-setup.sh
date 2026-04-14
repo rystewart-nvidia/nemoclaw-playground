@@ -33,6 +33,7 @@ fi
 
 SANDBOX_NAME="${SANDBOX_NAME:-my-assistant}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
+OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-131072}"
 
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   echo "ERROR: TELEGRAM_BOT_TOKEN is not set. Fill it in .env or export it before running." >&2
@@ -77,6 +78,7 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
   "TELEGRAM_BOT_TOKEN='$TELEGRAM_BOT_TOKEN' \
    ALLOWED_CHAT_IDS='$ALLOWED_CHAT_IDS' \
    OLLAMA_MODEL='$OLLAMA_MODEL' \
+   OLLAMA_CONTEXT_LENGTH='$OLLAMA_CONTEXT_LENGTH' \
    TELEGRAM_IP='$TELEGRAM_IP' \
    bash /tmp/configure-openclaw.sh"
 
