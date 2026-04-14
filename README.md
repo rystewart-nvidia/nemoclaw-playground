@@ -175,6 +175,58 @@ Expected: agent calls the `web_search` tool, SearXNG returns results, agent summ
 Verify via `docker compose logs -f searxng` — you should see an inbound search query.
 The agent response should cite sources, not use shell/exec tool calls.
 
+## Logs
+
+There are three independent log sources, each showing a different layer of the system:
+
+### openshell network log
+
+```bash
+openshell logs --tail
+```
+
+Shows every outbound connection the sandbox makes — protocol, destination, path, and whether it was allowed or blocked. This is the primary signal for connectivity issues.
+
+Key patterns to look for:
+- `L7_REQUEST ... api.telegram.org ... /bot.../getUpdates` — gateway is polling (healthy)
+- `L7_REQUEST ... host.openshell.internal:8888 ... /search` — SearXNG being called
+- `FORWARD blocked` — a connection was denied by policy (shows reason and destination)
+- `TLS` errors — usually means wrong policy mode (`access: full` instead of `tls: terminate`)
+
+Useful variants:
+```bash
+openshell logs --tail --source sandbox --level debug   # more verbose
+openshell logs --tail | grep api.telegram.org          # Telegram only
+openshell logs --tail | grep BLOCKED                   # policy blocks only
+```
+
+### openclaw gateway log
+
+```bash
+source .env
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
+ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -f /tmp/gateway.log"
+```
+
+Shows openclaw gateway lifecycle events: startup, config loads, channel connect/disconnect, and application-level errors. Does NOT show individual message polls — use the openshell network log for that.
+
+Useful for diagnosing:
+- Gateway startup failures (bad config, missing token)
+- Channel errors (`deleteWebhook` failures, auth errors from Telegram)
+- Config hot-reload events
+
+### SearXNG log
+
+```bash
+docker compose logs -f searxng
+```
+
+Shows every search query hitting SearXNG, which engines handled it, per-engine latency, and errors (rate limits, blocked engines). Debug logging is enabled in `searxng/settings.yml` (`general.debug: true`).
+
+Useful for diagnosing why search results are empty or partial.
+
+---
+
 ## Recommended Terminals
 
 Keep these running while using the assistant:
