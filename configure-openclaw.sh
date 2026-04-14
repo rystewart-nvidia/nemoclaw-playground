@@ -67,7 +67,7 @@ with open('/sandbox/.openclaw/openclaw.json') as f:
 config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
     'baseUrl': 'http://host.openshell.internal:11434',
     'api': 'ollama',
-    'request': {'allowPrivateNetwork': True, 'num_ctx': $OLLAMA_CONTEXT_LENGTH},
+    'request': {'allowPrivateNetwork': True},
     'models': [{'id': '$OLLAMA_MODEL', 'name': '$OLLAMA_MODEL', 'api': 'ollama', 'contextWindow': $OLLAMA_CONTEXT_LENGTH}]
 }
 config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ollama/$OLLAMA_MODEL'
