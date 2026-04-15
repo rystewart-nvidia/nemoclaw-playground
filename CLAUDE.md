@@ -9,10 +9,8 @@ This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). Th
 - ⏳ **Investigate native gateway lifecycle management** — `start-openclaw-gateway.sh` is a collection of hacks: `nohup` + background process with no PID file, `sleep 2` timing guess before status check, no kill-before-start (starting twice conflicts), and brittle `sed` parsing of `ssh-config` output. Check if newer openclaw/nemoclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) nemoclaw managing the gateway as part of sandbox lifecycle (auto-start on onboard, restart on crash), (3) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
 - ⏳ **Investigate native alternatives to post-onboard.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config in `nemoclaw onboard` for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to nemoclaw so these steps don't have to be run manually after every `--recreate-sandbox`.
 - ✅ **Test initial openclaw onboarding flow** — verified 2026-04-12 on fresh sandbox; bot replied and remembered user's name
-- ✅ **SearXNG as a dedicated tool** — DONE 2026-04-12. `web_fetch` blocked by openclaw SSRF layer for `.internal` domains. Final approach: `exec` + `curl` to `http://host.openshell.internal:8888/search?q=...&format=json`. Agent taught via `TOOLS.md` in workspace (`/sandbox/.openclaw-data/workspace/TOOLS.md`). NOT solvable via plugin in v2026.3.11 — used workspace context injection instead.
+- ✅ **SearXNG as a dedicated tool** — DONE. Configured as an openclaw plugin in `configure-openclaw.sh` via `plugins.entries.searxng` with `config.webSearch.baseUrl`. SearXNG is a supported plugin (not just for Brave/Gemini/etc). Policy allows `host.openshell.internal:8888` with `allowed_ips`.
 - ✅ **Disable/hide unusable `web_search` tool** — DONE 2026-04-12. `tools.deny: ["web_search"]` in `openclaw.json` (top-level key). Validated working.
-- ⏳ **SearXNG TOOLS.md not being injected** — `TOOLS.md` is 0 bytes (heredoc write in `post-onboard.sh` is broken — heredoc is consumed by local shell, not passed to kubectl exec) AND openclaw may not read `TOOLS.md` at all. Injected files are: `AGENTS.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`. Need to: (1) fix the write approach in `post-onboard.sh` (use `kubectl exec -i` with piped stdin instead of heredoc), (2) confirm whether to append to `AGENTS.md` or whether `TOOLS.md` is also read. Check existing `AGENTS.md` content before overwriting.
-- ⏳ **Replace SearXNG TOOLS.md workaround with MCP tool** — Current approach (TOOLS.md context injection + `exec`/curl) is intentionally temporary. openclaw v2026.3.11 has no MCP support; it was confirmed added in later versions. When upgrading openclaw, replace with a proper registered MCP `search` tool: write a minimal stdio MCP server that wraps SearXNG, register it via `openclaw mcp set`. This eliminates the TOOLS.md hack and gives the agent a first-class named tool.
 - ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `post-onboard.sh`, (3) whether newer openclaw/Landlock versions resolve this.
 - ⏳ **Investigate live model swapping** — `NEMOCLAW_MODEL` and `NEMOCLAW_PRIMARY_MODEL_REF` are baked into the sandbox pod's environment variables at `nemoclaw onboard` time. Changing the model in `openclaw.json` alone has no effect — the gateway reads the env vars. Investigate: (1) whether nemoclaw provides a `nemoclaw my-assistant set-model <model>` or equivalent command, (2) whether patching the pod env vars via `kubectl patch` + pod restart is viable without a full onboard, (3) whether there's a nemoclaw API for this.
 - ⏳ **Policy builder/applier UI** — the current policy workflow (hand-editing YAML, running `openshell policy set`, knowing about full-replacement semantics, `allowed_ips` for internal IPs, etc.) is too complex for most users. Build a simple interface that lets users add/remove endpoints and applies the full policy file correctly.
@@ -178,7 +176,7 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 Also added `/sandbox/.openclaw/workspace-state.json` to `read_write` in `policies/sandbox-policy.yaml`.
 > ⚠️ Not persistent — lost on sandbox rebuild. Now included in step [4/4] of `scripts/post-onboard.sh`.
 
-**Note (2026-04-12)**: `agents.defaults.workspace` is now set (required for TOOLS.md injection). The symlink + policy `read_write` entry appears sufficient for openclaw to write workspace-state.json without EACCES. If EACCES returns after a rebuild, re-run `scripts/post-onboard.sh` (step 4 creates the symlink).
+**Note (2026-04-12)**: `agents.defaults.workspace` is set in the config. The symlink + policy `read_write` entry is sufficient for openclaw to write workspace-state.json without EACCES. If EACCES returns after a rebuild, re-run the setup script (it recreates the symlink).
 
 ### `openclaw.json` zeroed out after config edit
 **Cause**: Reading and writing `openclaw.json` through the same pipeline races — `cat > openclaw.json` truncates the file before `cat openclaw.json` finishes reading. Symptom: file size becomes 0.
@@ -329,7 +327,7 @@ reason=Blocked hostname or private/internal/special-use IP address
 
 This blocks `.internal` domains and RFC1918 IPs regardless of what the OpenShell policy allows. The config key to bypass it is `allowPrivateNetwork: true` (found in `config/zod-schema.d.ts`), but the exact path in `openclaw.json` is not yet determined.
 
-**Workaround**: Use `exec` + `curl` via bash instead of `web_fetch` for internal URLs (curl goes through the OpenShell proxy and IS allowed). Or tell the agent to use curl explicitly.
+**For SearXNG**: Use the openclaw SearXNG plugin (configured in `configure-openclaw.sh`) — it does not go through `web_fetch`. For other internal URLs, `exec` + `curl` via bash works (curl goes through the OpenShell proxy and IS allowed).
 
 ## Gateway restart: pkill is unreliable — use kill -9 via kubectl
 
@@ -350,13 +348,10 @@ If the gateway is stuck, use `kill -9` via kubectl as above.
 ## SearXNG integration approach
 - SearXNG runs in Docker Compose on host port 8888
 - From inside sandbox: `http://host.openshell.internal:8888`
-- **Final approach: `exec` + `curl`** — NOT `web_fetch` (openclaw's SSRF layer blocks `.internal` domains)
-- `web_search` tool only supports Brave Search API (native openclaw, not configurable)
-- `web_fetch` is blocked for internal hostnames by hardcoded openclaw security module — not configurable via `tools.web.fetch` config in v2026.3.11
-- `exec` + `curl` works: curl goes through OpenShell proxy, which allows `host.openshell.internal:8888` per policy
-- Agent is taught to use SearXNG via `TOOLS.md` in the workspace (`/sandbox/.openclaw-data/workspace/TOOLS.md`)
-- `tools.deny: ["web_search"]` hides the non-functional Brave search tool from the agent
-- Policy file: `policies/sandbox-policy.yaml` (full policy including all presets)
+- **Approach: openclaw plugin** — configured in `configure-openclaw.sh` as `plugins.entries.searxng` with `config.webSearch.baseUrl: http://host.openshell.internal:8888`
+- Policy file `policies/sandbox-policy.yaml` allows `host.openshell.internal:8888` with `allowed_ips` (required to whitelist the RFC1918 Docker host gateway IP)
+- `web_fetch` is still blocked for internal hostnames by the openclaw SSRF layer — the plugin does not use `web_fetch` internally
+- `tools.deny: ["web_search"]` hides the native (Brave-only) `web_search` tool so the agent uses the SearXNG plugin instead
 
 ## openclaw config internals (v2026.3.11)
 
@@ -374,15 +369,19 @@ If the gateway is stuck, use `kill -9` via kubectl as above.
 - Built-in tool IDs: `web_search`, `web_fetch`, `browser`, `read`, `write`, `edit`, `exec`, `code_execution`, etc.
 - Tool profiles: `"profile": "full" | "coding" | "messaging" | "minimal"`
 
-### What web_search supports (v2026.3.11)
-`tools.web.search.provider` accepts ONLY: `"brave"`, `"gemini"`, `"grok"`, `"kimi"`, `"perplexity"`.
-**SearXNG is NOT a built-in provider** in this version. The docs describing a `searxng` provider or plugin are for a different/later version.
+### SearXNG plugin (v2026.3.11)
+SearXNG is available as an openclaw plugin. Configure it by writing directly to `openclaw.json` (the `openclaw plugins enable` CLI command fails with EACCES inside the sandbox, but direct JSON editing works):
 
-### Plugin API (v2026.3.11)
-- `openclaw plugins list` shows 38 available plugins — **no SearXNG plugin**
-- The plugin SDK has `api.registerTool()` but NO `api.registerWebSearchProvider()`
-- Writing a custom plugin requires TypeScript + openclaw SDK compilation — not practical in sandbox
-- `openclaw configure` and `openclaw plugins enable` fail with EACCES inside sandbox (Landlock read-only)
+```python
+config['plugins']['entries']['searxng'] = {
+    'enabled': True,
+    'config': {'webSearch': {'baseUrl': 'http://host.openshell.internal:8888'}}
+}
+```
+
+This is handled automatically by `configure-openclaw.sh` on every setup run.
+
+Note: `openclaw configure` and `openclaw plugins enable` CLI commands still fail with EACCES inside the sandbox (Landlock read-only on `/sandbox/.openclaw/openclaw.json`). Direct Python JSON editing bypasses this.
 
 ### Workspace context files (AGENTS.md, BOOTSTRAP.md, HEARTBEAT.md)
 openclaw reads these markdown files from the agent workspace directory and injects them into the agent's context:
