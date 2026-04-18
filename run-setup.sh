@@ -48,6 +48,15 @@ fi
 # ---------------------------------------------------------------------------
 echo "==> Generating SSH config for sandbox '$SANDBOX_NAME'..."
 SSH_CONF="/tmp/os-ssh-${SANDBOX_NAME}.conf"
+if [[ -f "$SSH_CONF" ]]; then
+  read -r -p "    SSH config already exists at $SSH_CONF. Delete and regenerate? [y/N] " reply
+  if [[ "$reply" =~ ^[Yy]$ ]]; then
+    rm -f "$SSH_CONF"
+  else
+    echo "    Exiting. Remove $SSH_CONF manually or re-run and confirm deletion."
+    exit 0
+  fi
+fi
 openshell sandbox ssh-config "$SANDBOX_NAME" > "$SSH_CONF"
 echo "    Config written to $SSH_CONF"
 
@@ -66,4 +75,4 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
    bash /tmp/configure-openclaw.sh"
 
 echo ""
-echo "Setup complete. To watch Telegram polling: openshell logs --tail"
+echo "Setup complete."

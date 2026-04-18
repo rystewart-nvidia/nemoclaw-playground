@@ -26,7 +26,7 @@ An openshell sandbox running openclaw as a personal AI assistant, accessible via
 ### 1. Install openshell
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | OPENSHELL_VERSION=v0.0.31 sh
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | OPENSHELL_VERSION=v0.0.32 sh
 ```
 
 ### 2. Configure credentials
