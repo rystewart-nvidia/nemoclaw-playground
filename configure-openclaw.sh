@@ -41,38 +41,30 @@ if [[ -z "${ALLOWED_CHAT_IDS:-}" ]]; then
   exit 1
 fi
 
-python3 << 'PYEOF'
-import json, os
+openclaw config set gateway.mode local
+openclaw config set channels.telegram.enabled true
+IFS=',' read -ra _CHAT_ID_ARRAY <<< "$ALLOWED_CHAT_IDS"
+for _i in "${!_CHAT_ID_ARRAY[@]}"; do
+  openclaw config set "channels.telegram.allowFrom.$_i" "${_CHAT_ID_ARRAY[$_i]// /}"
+done
+openclaw config set channels.telegram.dmPolicy allowlist
+openclaw config set channels.telegram.botToken "$TELEGRAM_BOT_TOKEN"
+# Write Ollama provider config and SearXNG plugin in a single Python pass.
+# openclaw config set validates the full schema after each write, so we cannot
+# set models.providers.ollama.baseUrl alone — the models[] array is required too.
+# Writing the full provider object at once via Python avoids this.
+python3 -c "
+import json
 
-try:
-    with open('/sandbox/.openclaw/openclaw.json') as f:
-        config = json.load(f)
-except FileNotFoundError:
-    config = {}
+with open('/sandbox/.openclaw/openclaw.json') as f:
+    config = json.load(f)
 
-# Run the gateway in local mode (no cloud relay)
-config.setdefault('gateway', {})['mode'] = 'local'
-
-# Telegram channel: enable, set bot token, restrict to allowlisted chat IDs
-config.setdefault('channels', {})['telegram'] = {
-    'enabled': True,
-    'botToken': os.environ['TELEGRAM_BOT_TOKEN'],
-    'allowFrom': [id.strip() for id in os.environ['ALLOWED_CHAT_IDS'].split(',')],
-    'dmPolicy': 'allowlist',
-}
-
-# Ollama provider: point at the host Ollama instance via the openshell internal hostname
-ollama_model = os.environ['OLLAMA_MODEL']
-ollama_ctx = int(os.environ['OLLAMA_CONTEXT_LENGTH'])
 config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
     'baseUrl': 'http://host.openshell.internal:11434',
     'api': 'ollama',
-    'models': [{'id': ollama_model, 'name': ollama_model, 'api': 'ollama', 'contextWindow': ollama_ctx}]
+    'models': [{'id': '$OLLAMA_MODEL', 'name': '$OLLAMA_MODEL', 'api': 'ollama', 'contextWindow': $OLLAMA_CONTEXT_LENGTH}]
 }
-# Set the Ollama model as the default for all agents
-config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = f'ollama/{ollama_model}'
-
-# SearXNG plugin: point at the host SearXNG instance for web search
+config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ollama/$OLLAMA_MODEL'
 config.setdefault('plugins', {}).setdefault('entries', {})['searxng'] = {
     'enabled': True,
     'config': {'webSearch': {'baseUrl': 'http://host.openshell.internal:8888'}}
@@ -81,7 +73,7 @@ config.setdefault('plugins', {}).setdefault('entries', {})['searxng'] = {
 with open('/sandbox/.openclaw/openclaw.json', 'w') as f:
     json.dump(config, f, indent=2)
 print('  Config updated.')
-PYEOF
+"
 openclaw config validate
 
 echo "  openclaw configured."
@@ -89,7 +81,7 @@ echo "  openclaw configured."
 # ---------------------------------------------------------------------------
 # [2/2] Start gateway
 # ---------------------------------------------------------------------------
-echo "==> [2/2] Restarting openclaw gateway..."
+echo "==> [2/2] Starting openclaw gateway..."
 pkill -f "openclaw gateway run" 2>/dev/null || true
 rm -f /tmp/gateway.log
 setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &

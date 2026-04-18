@@ -8,14 +8,13 @@ USER root
 
 # Upgrade openclaw to latest stable.
 # Update the version pin when a new stable release is available.
-# ARG OPENCLAW_VERSION=2026.4.15
-ARG OPENCLAW_VERSION=latest
-RUN npm install -g openclaw@${OPENCLAW_VERSION}
+# RUN npm install -g openclaw@latest
 
 # Copy the openclaw configuration script (run once by the user after sandbox creation).
 COPY configure-openclaw.sh /usr/local/bin/configure-openclaw
 RUN chmod +x /usr/local/bin/configure-openclaw
 
+# Drop back to sandbox user for runtime.
 USER sandbox
 
 # NOTE: CMD is ignored by OpenShell — the sandbox supervisor replaces it.

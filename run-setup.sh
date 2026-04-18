@@ -66,4 +66,4 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
    bash /tmp/configure-openclaw.sh"
 
 echo ""
-echo "Setup complete"
+echo "Setup complete. To watch Telegram polling: openshell logs --tail"
