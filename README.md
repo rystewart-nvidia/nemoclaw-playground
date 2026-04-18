@@ -26,7 +26,7 @@ An openshell sandbox running openclaw as a personal AI assistant, accessible via
 ### 1. Install openshell
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+OPENSHELL_VERSION=v0.0.28 curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
 ```
 
 ### 2. Configure credentials
@@ -88,16 +88,24 @@ The custom Dockerfile (at repo root) extends the openclaw base image with `dnsut
 ```bash
 source .env
 openshell sandbox create \
-  --name $SANDBOX_NAME \
-  --from Dockerfile \
-  --policy policies/sandbox-policy.yaml
+  --name "$SANDBOX_NAME" \
+  --from ./Dockerfile \
+  --policy ./policies/sandbox-policy.yaml \
+  -- exit
 ```
+
+> **Note:** `-- exit` passes `exit` as the command to run in the sandbox on creation, which causes it to exit immediately instead of dropping into an interactive shell. To open a shell manually: `openshell sandbox connect $SANDBOX_NAME`
 
 > **Note:** Filesystem and process policies are locked at sandbox creation time. Network policies can be hot-reloaded at any time with `openshell policy set`.
 
 ### 6. Configure openclaw
 
-`configure-openclaw.sh` (copied into the sandbox image at `/usr/local/bin/configure-openclaw`) configures openclaw and starts the gateway. `run-setup.sh` is the host-side wrapper that handles SSH config generation and IP resolution automatically.
+`configure-openclaw.sh` runs inside the sandbox and does three things:
+1. Sets the Telegram channel config (bot token, allowed chat IDs, dm policy)
+2. Writes the Ollama provider and SearXNG plugin to `openclaw.json` via Python (required because `openclaw config set` validates the full schema after each write and rejects partial provider objects)
+3. Starts the openclaw gateway as a background process
+
+`run-setup.sh` is the host-side wrapper that handles SSH config generation, uploads the latest `configure-openclaw.sh`, and runs it.
 
 #### Option A — run-setup.sh (recommended, scriptable from host)
 
@@ -107,9 +115,8 @@ bash run-setup.sh
 
 This script:
 1. Generates an SSH config for the sandbox via `openshell sandbox ssh-config`
-2. Resolves `api.telegram.org` IP on the host (the sandbox nameserver has no external DNS)
-3. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
-4. SSHes into the sandbox and runs the uploaded script with all required env vars
+2. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
+3. SSHes into the sandbox and runs it with all required env vars
 
 `openshell sandbox ssh-config` outputs an SSH `Host` block with a `ProxyCommand` that routes traffic through the openshell runtime. The host alias is always `openshell-<sandbox-name>`.
 
@@ -119,14 +126,11 @@ This script:
 
 ```bash
 source .env
-# Resolve Telegram IP on the host first (required — sandbox nameserver has no external DNS)
-TELEGRAM_IP=$(dig +short api.telegram.org A | grep -m1 '^[0-9]')
 openshell sandbox connect $SANDBOX_NAME
 # You are now inside the sandbox shell. Export all required vars, then run setup:
 export TELEGRAM_BOT_TOKEN="<your-token>"
 export ALLOWED_CHAT_IDS="<your-chat-id>"
 export OLLAMA_MODEL="qwen3.5:9b"
-export TELEGRAM_IP="<ip-from-above>"
 bash /usr/local/bin/configure-openclaw
 ```
 
@@ -140,8 +144,8 @@ openshell logs --tail
 
 Or from inside the sandbox:
 ```bash
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -20 /tmp/gateway.log"
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "tail -20 /tmp/gateway.log"
 ```
 
 ### 7. Apply sandbox policy (if not applied at creation)
@@ -204,8 +208,8 @@ openshell logs --tail | grep BLOCKED                   # policy blocks only
 
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -f /tmp/gateway.log"
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "tail -f /tmp/gateway.log"
 ```
 
 Shows openclaw gateway lifecycle events: startup, config loads, channel connect/disconnect, and application-level errors. Does NOT show individual message polls — use the openshell network log for that.
@@ -261,10 +265,10 @@ The sandbox is the isolated container where openclaw runs. It persists across ga
 
 | When | Command |
 |---|---|
-| Initial setup | `openshell sandbox create --name $SANDBOX_NAME --from Dockerfile --policy policies/sandbox-policy.yaml` |
+| Initial setup | `openshell sandbox create --name "$SANDBOX_NAME" --from ./Dockerfile --policy ./policies/sandbox-policy.yaml --keep -- exit` |
 | Inspect | `openshell sandbox list` / `openshell sandbox status $SANDBOX_NAME` |
 | Interactive shell | `openshell sandbox connect $SANDBOX_NAME` |
-| Non-interactive SSH | `openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf && ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME '<cmd>'` |
+| Non-interactive SSH | `openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf && ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME '<cmd>'` |
 | Re-apply network policy | `openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait` |
 | Delete and recreate from scratch | `openshell sandbox delete $SANDBOX_NAME` then recreate |
 
@@ -284,8 +288,8 @@ source .env && bash run-setup.sh
 Or restart just the gateway without re-running full setup:
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
   "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
 ```
 
@@ -298,8 +302,8 @@ openshell logs --tail
 **View gateway logs:**
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
 ```
 
 > The openclaw gateway must be restarted after: sandbox recreation, config changes to `openclaw.json`, or if Telegram stops responding.
@@ -320,8 +324,8 @@ bash run-setup.sh                # 2. restart the openclaw gateway (sandbox pers
 Edit `.env` to update `OLLAMA_MODEL`, then reconfigure inside the sandbox:
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
   "openclaw config set agents.defaults.model.primary 'ollama/$OLLAMA_MODEL'"
 ```
 
@@ -348,8 +352,8 @@ openshell forward stop 18789
 The gateway runs as a background process (`setsid`). To restart it:
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
   "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
 ```
 
@@ -358,7 +362,7 @@ ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME \
 ## Troubleshooting
 
 **Telegram not working / "Network request failed" in gateway log**
-This is usually a DNS issue. The sandbox nameserver has no external DNS, so openshell's hostname verifier can't resolve `api.telegram.org`. `configure-openclaw.sh` fixes this by writing a static `/etc/hosts` entry. Re-run `run-setup.sh` if it was skipped.
+Check that the gateway is running (`openshell logs --tail` should show `getUpdates` requests). If not, re-run `run-setup.sh` to restart it.
 
 **Telegram TLS error / `UnknownIssuer` in logs**
 Re-apply the policy file. This happens when `openshell term` creates an `access: full` override:
@@ -374,14 +378,14 @@ Check the `allowed_ips` in `policies/sandbox-policy.yaml`. The correct host gate
 **Web search returns no results (but SearXNG logs show a request)**
 Check that `web_search` is not in a deny list in `openclaw.json` inside the sandbox:
 ```bash
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "openclaw config get tools"
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "openclaw config get tools"
 ```
 
 **Bot not responding / no `getUpdates` in logs**
 ```bash
 source .env
-openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh.conf
-ssh -F /tmp/os-ssh.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "tail -50 /tmp/gateway.log"
 ```
 If the gateway isn't running, see "Restarting the gateway" above.
 

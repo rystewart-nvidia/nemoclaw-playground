@@ -7,15 +7,14 @@
 #
 # What it does:
 #   1. Generates an SSH config for the sandbox (openshell sandbox ssh-config)
-#   2. Resolves api.telegram.org IP on the host (sandbox nameserver has no DNS)
-#   3. Uploads the current configure-openclaw.sh from the repo into the sandbox (always latest)
-#   4. SSHes into the sandbox and runs the uploaded script with all required env vars
+#   2. Uploads the current configure-openclaw.sh from the repo into the sandbox (always latest)
+#   3. SSHes into the sandbox and runs the uploaded script with all required env vars
 #
 # Note: configure-openclaw.sh is also baked into the sandbox image at
 # /usr/local/bin/configure-openclaw by the Dockerfile, but run-setup.sh uploads the repo
 # version each time so you can iterate on it without rebuilding the image.
 #
-# Requires: .env with TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_IDS set; SANDBOX_NAME optional
+# Requires: .env with TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_IDS set; SANDBOX_NAME, OLLAMA_MODEL optional
 # Requires: openshell installed and sandbox already created (see README step 5)
 
 set -euo pipefail
@@ -48,24 +47,9 @@ fi
 # Generate SSH config (always regenerate in case sandbox was recreated)
 # ---------------------------------------------------------------------------
 echo "==> Generating SSH config for sandbox '$SANDBOX_NAME'..."
-SSH_CONF=$(mktemp /tmp/os-ssh-XXXXXX.conf)
+SSH_CONF="/tmp/os-ssh-${SANDBOX_NAME}.conf"
 openshell sandbox ssh-config "$SANDBOX_NAME" > "$SSH_CONF"
 echo "    Config written to $SSH_CONF"
-
-# ---------------------------------------------------------------------------
-# Resolve Telegram IP on the host (sandbox nameserver blocks external DNS)
-# ---------------------------------------------------------------------------
-echo "==> Resolving api.telegram.org on host..."
-TELEGRAM_IP=$(dig +short api.telegram.org A 2>/dev/null | grep -E '^[0-9]+\.' | head -1 || true)
-if [[ -z "$TELEGRAM_IP" ]]; then
-  TELEGRAM_IP=$(python3 -c "import socket; print(socket.gethostbyname('api.telegram.org'))" 2>/dev/null || true)
-fi
-if [[ -z "$TELEGRAM_IP" ]]; then
-  echo "ERROR: Could not resolve api.telegram.org on the host." >&2
-  echo "  Check your network / VPN and try again." >&2
-  exit 1
-fi
-echo "    Resolved: $TELEGRAM_IP"
 
 # ---------------------------------------------------------------------------
 # Upload latest configure-openclaw.sh and run inside the sandbox
@@ -79,7 +63,6 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
    ALLOWED_CHAT_IDS='$ALLOWED_CHAT_IDS' \
    OLLAMA_MODEL='$OLLAMA_MODEL' \
    OLLAMA_CONTEXT_LENGTH='$OLLAMA_CONTEXT_LENGTH' \
-   TELEGRAM_IP='$TELEGRAM_IP' \
    bash /tmp/configure-openclaw.sh"
 
 echo ""

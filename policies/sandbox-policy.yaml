@@ -10,8 +10,8 @@
 #   (copy network_policies section back here manually)
 #
 # ⚠️  WARNING: Do NOT use `openshell term` to approve Telegram connections. It creates an
-#     allow_api_telegram_org_443 rule with access:full that overrides the tls:terminate setting
-#     and breaks TLS. Re-apply this file immediately if that happens.
+#     allow_api_telegram_org_443 rule with access:full that overrides the protocol:rest rules
+#     and breaks the gateway. Re-apply this file immediately if that happens.
 #
 # Note: allowed_ips in searxng includes both macOS (192.168.65.254) and Linux/DGX (172.17.0.1) host gateway IPs
 
@@ -31,7 +31,6 @@ filesystem_policy:
   read_write:
     - /tmp
     - /dev/null
-    - /etc/hosts      # needed by setup.sh to add Telegram DNS entry (mechanistic_mapper fix)
     - /sandbox/.openclaw-data
     - /sandbox
     - /sandbox/.openclaw/credentials
@@ -53,7 +52,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
@@ -77,7 +75,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
@@ -85,7 +82,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
@@ -113,7 +109,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
@@ -128,7 +123,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
@@ -142,7 +136,6 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
     binaries:
@@ -241,13 +234,11 @@ network_policies:
         port: 443
         protocol: rest
         enforcement: enforce
-        tls: terminate
         rules:
           - allow: { method: GET, path: "/**" }
           - allow: { method: POST, path: "/**" }
-        # access:full was tried but TLS upgrade fails (socket closes mid-handshake) for all clients.
         # Note: openshell term approvals create allow_api_telegram_org_443 (access:full) that
-        # OVERRIDES this — do not approve Telegram in openshell term, or re-apply this policy after.
+        # OVERRIDES these rules — do not approve Telegram in openshell term, or re-apply this policy after.
     binaries:
       - { path: /usr/bin/node }
       - { path: /usr/bin/openclaw }

@@ -6,15 +6,12 @@
 #   source .env && bash run-setup.sh
 #
 # Manual interactive usage (from inside sandbox via `openshell sandbox connect <name>`):
-#   export TELEGRAM_BOT_TOKEN="..." ALLOWED_CHAT_IDS="..." OLLAMA_MODEL="..." TELEGRAM_IP="..."
+#   export TELEGRAM_BOT_TOKEN="..." ALLOWED_CHAT_IDS="..." OLLAMA_MODEL="..."
 #   bash /usr/local/bin/configure-openclaw
 #
 # What it does:
 #   1. Configures openclaw: Telegram channel, Ollama provider, SearXNG plugin, gateway mode
-#   2. Fixes Telegram DNS: writes a static /etc/hosts entry so OpenShell's
-#      mechanistic_mapper can resolve api.telegram.org (the sandbox nameserver
-#      has no DNS on port 53, which blocks connections without this fix)
-#   3. Starts the openclaw gateway as a background process
+#   2. Starts the openclaw gateway as a background process
 #
 # Environment variables (required):
 #   TELEGRAM_BOT_TOKEN  — from your .env file
@@ -24,8 +21,6 @@
 #                           sets both openclaw's contextWindow (conversation budget) and
 #                           num_ctx passed to Ollama (GPU memory allocation). Must match
 #                           what Ollama is configured to support.
-#   TELEGRAM_IP         — IP for api.telegram.org, resolved on the host before running
-#                         (sandbox nameserver has no external DNS; run-setup.sh handles this)
 
 set -euo pipefail
 
@@ -33,9 +28,9 @@ OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
 OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-131072}"
 
 # ---------------------------------------------------------------------------
-# [1/3] Configure openclaw
+# [1/2] Configure openclaw
 # ---------------------------------------------------------------------------
-echo "==> [1/3] Configuring openclaw..."
+echo "==> [1/2] Configuring openclaw..."
 
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   echo "  ERROR: TELEGRAM_BOT_TOKEN is not set" >&2
@@ -67,7 +62,6 @@ with open('/sandbox/.openclaw/openclaw.json') as f:
 config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
     'baseUrl': 'http://host.openshell.internal:11434',
     'api': 'ollama',
-    'request': {'allowPrivateNetwork': True},
     'models': [{'id': '$OLLAMA_MODEL', 'name': '$OLLAMA_MODEL', 'api': 'ollama', 'contextWindow': $OLLAMA_CONTEXT_LENGTH}]
 }
 config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ollama/$OLLAMA_MODEL'
@@ -85,45 +79,9 @@ openclaw config validate
 echo "  openclaw configured."
 
 # ---------------------------------------------------------------------------
-# [2/3] Fix Telegram DNS
+# [2/2] Start gateway
 # ---------------------------------------------------------------------------
-# The sandbox nameserver has no DNS on port 53.
-# OpenShell's mechanistic_mapper resolves hostnames to verify they're not
-# internal IPs. DNS failure = connection blocked.
-#
-# Fix: add a static /etc/hosts entry. /etc/hosts must be in read_write in
-# the sandbox policy for this to work.
-#
-# The sandbox nameserver cannot resolve external hostnames, so we accept the
-# IP as TELEGRAM_IP env var (resolved on the host before running this script).
-# Fallback: try dig/getent/python3 in case a future image has working DNS.
-echo "==> [2/3] Fixing Telegram DNS..."
-TGIP="${TELEGRAM_IP:-}"
-if [[ -z "$TGIP" ]]; then
-  TGIP=$(dig +short api.telegram.org A 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
-fi
-if [[ -z "$TGIP" ]]; then
-  TGIP=$(getent hosts api.telegram.org 2>/dev/null | awk '{print $1}' | head -1)
-fi
-if [[ -z "$TGIP" ]]; then
-  TGIP=$(python3 -c "import socket; print(socket.gethostbyname('api.telegram.org'))" 2>/dev/null || true)
-fi
-if [[ -z "$TGIP" ]]; then
-  echo "  ERROR: Could not resolve api.telegram.org — is DNS working?" >&2
-  echo "  Resolve on the host and pass as TELEGRAM_IP env var:" >&2
-  echo "    TELEGRAM_IP=\$(dig +short api.telegram.org A | grep -m1 '^[0-9]')" >&2
-  exit 1
-fi
-# Remove any existing entry then add fresh
-grep -v 'api.telegram.org' /etc/hosts > /tmp/hosts.new
-cat /tmp/hosts.new > /etc/hosts
-echo "$TGIP api.telegram.org" >> /etc/hosts
-echo "  Added: $TGIP api.telegram.org"
-
-# ---------------------------------------------------------------------------
-# [3/3] Start gateway
-# ---------------------------------------------------------------------------
-echo "==> [3/3] Starting openclaw gateway..."
+echo "==> [2/2] Starting openclaw gateway..."
 pkill -f "openclaw gateway run" 2>/dev/null || true
 rm -f /tmp/gateway.log
 setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
