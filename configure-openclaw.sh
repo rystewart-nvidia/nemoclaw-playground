@@ -66,9 +66,6 @@ config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
 }
 config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ollama/$OLLAMA_MODEL'
 
-# Deny the native web_search tool (requires Brave API key) so the agent uses the SearXNG plugin instead
-config.setdefault('tools', {})['deny'] = ['web_search']
-
 config.setdefault('plugins', {}).setdefault('entries', {})['searxng'] = {
     'enabled': True,
     'config': {'webSearch': {'baseUrl': 'http://host.openshell.internal:8888'}}

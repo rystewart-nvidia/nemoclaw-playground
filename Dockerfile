@@ -6,9 +6,9 @@ FROM ghcr.io/nvidia/openshell-community/sandboxes/openclaw:${OPENCLAW_SANDBOX_VE
 # The openclaw base image runs as the sandbox user. Switch to root for installs.
 USER root
 
-# Upgrade openclaw to latest stable.
+# Upgrade openclaw to a known-good version.
 # Update the version pin when a new stable release is available.
-# RUN npm install -g openclaw@latest
+RUN npm install -g openclaw@2026.4.12
 
 # Copy the openclaw configuration script (run once by the user after sandbox creation).
 COPY configure-openclaw.sh /usr/local/bin/configure-openclaw
