@@ -9,6 +9,13 @@
 #   1. Generates an SSH config for the sandbox (openshell sandbox ssh-config)
 #   2. Uploads the current configure-openclaw.sh from the repo into the sandbox (always latest)
 #   3. SSHes into the sandbox and runs the uploaded script with all required env vars
+#   4. Optionally restores workspace from a backup
+#
+# Options:
+#   --from-backup [timestamp]  Restore workspace after setup without prompting.
+#                              Uses most recent backup if no timestamp given.
+#   --no-restore               Skip backup restore prompt entirely.
+#   --regenerate-ssh           Auto-confirm SSH config regeneration if it already exists.
 #
 # Note: configure-openclaw.sh is also baked into the sandbox image at
 # /usr/local/bin/configure-openclaw by the Dockerfile, but run-setup.sh uploads the repo
@@ -30,6 +37,39 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
   set +a
 fi
 
+# ---------------------------------------------------------------------------
+# Parse command-line arguments
+# ---------------------------------------------------------------------------
+RESTORE_MODE=""        # "auto" | "skip" | "" (prompt)
+RESTORE_TIMESTAMP=""
+FORCE_SSH=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from-backup)
+      RESTORE_MODE="auto"
+      if [[ "${2:-}" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+        RESTORE_TIMESTAMP="$2"
+        shift
+      fi
+      shift
+      ;;
+    --no-restore)
+      RESTORE_MODE="skip"
+      shift
+      ;;
+    --regenerate-ssh)
+      FORCE_SSH=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Usage: bash run-setup.sh [--from-backup [timestamp]] [--no-restore] [--regenerate-ssh]" >&2
+      exit 1
+      ;;
+  esac
+done
+
 SANDBOX_NAME="${SANDBOX_NAME:-my-assistant}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3.5:9b}"
 OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-131072}"
@@ -49,12 +89,16 @@ fi
 echo "==> Generating SSH config for sandbox '$SANDBOX_NAME'..."
 SSH_CONF="/tmp/os-ssh-${SANDBOX_NAME}.conf"
 if [[ -f "$SSH_CONF" ]]; then
-  read -r -p "    SSH config already exists at $SSH_CONF. Delete and regenerate? [y/N] " reply
-  if [[ "$reply" =~ ^[Yy]$ ]]; then
+  if [[ "$FORCE_SSH" == true ]]; then
     rm -f "$SSH_CONF"
   else
-    echo "    Exiting. Remove $SSH_CONF manually or re-run and confirm deletion."
-    exit 0
+    read -r -p "    SSH config already exists at $SSH_CONF. Delete and regenerate? [y/N] " reply || true
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      rm -f "$SSH_CONF"
+    else
+      echo "    Exiting. Remove $SSH_CONF manually or re-run and confirm deletion."
+      exit 0
+    fi
   fi
 fi
 openshell sandbox ssh-config "$SANDBOX_NAME" > "$SSH_CONF"
@@ -73,6 +117,32 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
    OLLAMA_MODEL='$OLLAMA_MODEL' \
    OLLAMA_CONTEXT_LENGTH='$OLLAMA_CONTEXT_LENGTH' \
    bash /tmp/configure-openclaw.sh"
+
+# ---------------------------------------------------------------------------
+# Restore workspace backup (optional)
+# ---------------------------------------------------------------------------
+if [[ "$RESTORE_MODE" != "skip" ]]; then
+  _backup_root="${BACKUP_BASE:-$HOME/.openclaw/backups}/$SANDBOX_NAME"
+  if [[ -d "$_backup_root" ]] && [[ -n "$(ls -A "$_backup_root" 2>/dev/null)" ]]; then
+    echo ""
+    _latest=$(ls -1t "$_backup_root" | head -1)
+    _target="${RESTORE_TIMESTAMP:-$_latest}"
+
+    if [[ "$RESTORE_MODE" == "auto" ]]; then
+      echo "==> Restoring workspace from backup: $_target"
+      bash "$SCRIPT_DIR/scripts/backup-workspace.sh" restore "$_target" --yes
+    else
+      echo "==> Workspace backup found for '$SANDBOX_NAME'."
+      echo "    Most recent: $_latest"
+      read -r -p "    Restore workspace to '$SANDBOX_NAME'? [y/N] " _restore_reply || true
+      if [[ "$_restore_reply" =~ ^[Yy]$ ]]; then
+        bash "$SCRIPT_DIR/scripts/backup-workspace.sh" restore "$_latest"
+      else
+        echo "    Skipping restore."
+      fi
+    fi
+  fi
+fi
 
 echo ""
 echo "Setup complete."

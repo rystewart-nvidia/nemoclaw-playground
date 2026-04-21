@@ -87,6 +87,23 @@ PYEOF
 openclaw config validate
 echo "  openclaw configured."
 
+# Append a path reminder to AGENTS.md so the model doesn't prefix write paths
+# with the full workspace directory (which creates a double-nested structure).
+WORKSPACE_DIR="/sandbox/.openclaw/workspace"
+AGENTS_MD="$WORKSPACE_DIR/AGENTS.md"
+NOTE="
+## File Paths
+When writing workspace files, use either:
+- **Just the filename:** \`USER.md\`, \`IDENTITY.md\`
+- **Full absolute path:** \`/sandbox/.openclaw/workspace/USER.md\`
+
+Do NOT use a bare relative path like \`sandbox/.openclaw/workspace/USER.md\` (no leading slash) — that resolves relative to the workspace root and creates a double-nested directory."
+
+if [[ -f "$AGENTS_MD" ]] && ! grep -q "double-nested" "$AGENTS_MD"; then
+  echo "$NOTE" >> "$AGENTS_MD"
+  echo "  AGENTS.md updated with path guidance."
+fi
+
 # ---------------------------------------------------------------------------
 # [2/2] Start gateway
 # ---------------------------------------------------------------------------

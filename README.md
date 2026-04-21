@@ -110,13 +110,21 @@ openshell sandbox create \
 #### Option A — run-setup.sh (recommended, scriptable from host)
 
 ```bash
-bash run-setup.sh
+bash run-setup.sh [options]
 ```
+
+Options:
+| Flag | Effect |
+|---|---|
+| `--from-backup [timestamp]` | Restore workspace from backup after setup (most recent if no timestamp given) |
+| `--no-restore` | Skip the backup restore prompt entirely |
+| `--regenerate-ssh` | Auto-confirm SSH config regeneration without prompting |
 
 This script:
 1. Generates an SSH config for the sandbox via `openshell sandbox ssh-config`
 2. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
 3. SSHes into the sandbox and runs it with all required env vars
+4. Prompts to restore a workspace backup if one exists (unless `--no-restore` or `--from-backup` is passed)
 
 `openshell sandbox ssh-config` outputs an SSH `Host` block with a `ProxyCommand` that routes traffic through the openshell runtime. The host alias is always `openshell-<sandbox-name>`.
 
@@ -319,6 +327,58 @@ openshell gateway start          # 1. bring the host runtime back up
 bash run-setup.sh                # 2. restart the openclaw gateway (sandbox persists)
 ```
 
+### Backup and restore
+
+The agent workspace (`/sandbox/.openclaw/workspace`) holds personality and memory files that accumulate over time (SOUL.md, USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, memory/). These are lost when the sandbox is destroyed or recreated. Back up before any destructive operation.
+
+**Create a backup:**
+```bash
+bash scripts/backup-workspace.sh backup
+```
+
+Backups are stored at `$BACKUP_BASE/<sandbox-name>/<timestamp>/` (default: `./backups/`). Override the location by setting `BACKUP_BASE` in `.env`.
+
+**List available backups:**
+```bash
+bash scripts/backup-workspace.sh list
+```
+
+**Restore most recent backup:**
+```bash
+bash scripts/backup-workspace.sh restore
+```
+
+**Restore a specific backup:**
+```bash
+bash scripts/backup-workspace.sh restore 20260421-143022
+```
+
+All restore commands prompt for confirmation before uploading. Pass `--yes` to skip:
+```bash
+bash scripts/backup-workspace.sh restore --yes
+```
+
+**Restore automatically as part of setup:**
+
+If a backup exists, `run-setup.sh` prompts to restore after configuration. To restore without prompting:
+```bash
+bash run-setup.sh --from-backup
+```
+
+**Typical rebuild-and-restore workflow:**
+```bash
+# 1. Back up before destroying
+bash scripts/backup-workspace.sh backup
+
+# 2. Recreate the sandbox
+source .env
+openshell sandbox delete $SANDBOX_NAME
+openshell sandbox create --name "$SANDBOX_NAME" --from ./Dockerfile --policy ./policies/sandbox-policy.yaml -- exit
+
+# 3. Set up and restore in one step
+bash run-setup.sh --regenerate-ssh --from-backup
+```
+
 ### Changing the Ollama model
 
 Edit `.env` to update `OLLAMA_MODEL`, then reconfigure inside the sandbox:
@@ -331,14 +391,18 @@ ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
 
 ### Accessing the openclaw dashboard
 
-The openclaw canvas (dashboard) runs inside the sandbox at `http://127.0.0.1:18789/__openclaw__/canvas/`. Use `openshell forward` to tunnel it to the host:
-
+First, get the dashboard URL and auth token:
 ```bash
 source .env
+openshell sandbox exec $SANDBOX_NAME openclaw dashboard
+```
+
+This prints the local URL and token. Then forward the port to your host:
+```bash
 openshell forward start 18789 $SANDBOX_NAME -d
 ```
 
-Then open [http://localhost:18789/__openclaw__/canvas/](http://localhost:18789/__openclaw__/canvas/) in your browser.
+Open the URL from the output above in your browser.
 
 To stop the forward:
 ```bash

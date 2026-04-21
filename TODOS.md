@@ -10,7 +10,7 @@ Open items from the openshell + openclaw migration.
 
 - [ ] **Investigate user-agent header configuration** — `openclaw config get tools` returns "Config path not found" in v2026.4.12 — no `tools` config section exists. Check in future openclaw versions whether a `tools.web.fetch.headers` or similar key is supported for setting custom user-agent and request headers on `web_fetch` calls. Currently not configurable; `web_fetch` sends browser-like headers automatically but they can't be overridden.
 
-- [ ] **Pin dependency versions** — Currently `openclaw@latest` is installed in the Dockerfile and openshell/nemoclaw are installed via `curl | sh` with no version pins. This makes builds non-reproducible — a new openclaw release could break config schema, gateway behavior, or plugin APIs without warning. Pin at minimum: (1) `openclaw` in the Dockerfile (`npm install -g openclaw@<version>`), (2) openshell CLI version in install instructions and README, (3) consider pinning the base Docker image tag if openclaw publishes versioned images. Document the tested/known-good versions in README.
+- [ ] **Pin dependency versions** — Currently `openclaw@latest` is installed in the Dockerfile and openshell is installed via `curl | sh` with no version pins. This makes builds non-reproducible — a new openclaw release could break config schema, gateway behavior, or plugin APIs without warning. Pin at minimum: (1) `openclaw` in the Dockerfile (`npm install -g openclaw@<version>`), (2) openshell CLI version in install instructions and README, (3) consider pinning the base Docker image tag if openclaw publishes versioned images. Document the tested/known-good versions in README.
 
 ## Pending
 

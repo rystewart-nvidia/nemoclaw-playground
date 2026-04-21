@@ -1,41 +1,38 @@
 # CLAUDE.md
 
 ## Purpose
-This repo is a living setup guide for running NemoClaw + Ollama (+ Telegram). The primary artifact is `README.md`.
+This repo is a living setup guide for running openclaw + Ollama (+ Telegram) via OpenShell. The primary artifact is `README.md`.
 
 ## Open todos
 - ✅ **Verify Telegram bridge end-to-end** — DONE 2026-04-12. Bot responds to DMs.
-- ⏳ **Make post-onboard fixes persistent** — `/etc/hosts`, symlinks, and token injection are all lost on sandbox restart. Currently handled by `scripts/post-onboard.sh`. Permanent fix would require HostAlias + Landlock policy changes at `nemoclaw onboard` time.
-- ⏳ **Investigate native gateway lifecycle management** — `start-openclaw-gateway.sh` is a collection of hacks: `nohup` + background process with no PID file, `sleep 2` timing guess before status check, no kill-before-start (starting twice conflicts), and brittle `sed` parsing of `ssh-config` output. Check if newer openclaw/nemoclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) nemoclaw managing the gateway as part of sandbox lifecycle (auto-start on onboard, restart on crash), (3) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
-- ⏳ **Investigate native alternatives to post-onboard.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config in `nemoclaw onboard` for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to nemoclaw so these steps don't have to be run manually after every `--recreate-sandbox`.
+- ⏳ **Make post-onboard fixes persistent** — `/etc/hosts`, symlinks, and token injection are all lost on sandbox restart. Currently handled by `scripts/post-onboard.sh`. Permanent fix would require HostAlias + Landlock policy changes applied at sandbox creation time via openshell.
+- ⏳ **Investigate native gateway lifecycle management** — `configure-openclaw.sh` starts the gateway with `setsid` + no PID file. Check if newer openclaw versions provide: (1) `openclaw gateway start/stop/status` commands with proper daemon management, (2) a first-class API for running commands in the sandbox without raw SSH + ProxyCommand parsing.
+- ⏳ **Investigate native alternatives to post-onboard.sh workarounds** — The script is a collection of hacks. Check if newer versions address: (1) `openshell:resolve:env:` placeholder resolution at runtime (eliminating token injection), (2) a HostAlias or DNS config at sandbox creation time for external hostnames (eliminating `/etc/hosts` injection), (3) Landlock policy that makes `/sandbox/.openclaw/` writable for specific subdirs/files (eliminating all the symlink surgery), (4) a supported way to pass post-onboard setup hooks to openshell so these steps don't have to be run manually after every sandbox rebuild.
 - ✅ **Test initial openclaw onboarding flow** — verified 2026-04-12 on fresh sandbox; bot replied and remembered user's name
 - ✅ **SearXNG as a dedicated tool** — DONE. Configured as an openclaw plugin in `configure-openclaw.sh` via `plugins.entries.searxng` with `config.webSearch.baseUrl`. SearXNG is a supported plugin (not just for Brave/Gemini/etc). Policy allows `host.openshell.internal:8888` with `allowed_ips`.
 - ✅ **Disable/hide unusable `web_search` tool** — DONE 2026-04-12. `tools.deny: ["web_search"]` in `openclaw.json` (top-level key). Validated working.
 - ⏳ **`openclaw doctor --fix` config migration blocked by Landlock** — `doctor --fix` wants to restructure `channels.telegram` accounts in `openclaw.json` but fails with EACCES (Landlock blocks writes inside sandbox). The migration was not saved. Investigate: (1) whether the migration matters for correct operation, (2) whether it should be applied via `kubectl exec` in `post-onboard.sh`, (3) whether newer openclaw/Landlock versions resolve this.
-- ⏳ **Investigate live model swapping** — `NEMOCLAW_MODEL` and `NEMOCLAW_PRIMARY_MODEL_REF` are baked into the sandbox pod's environment variables at `nemoclaw onboard` time. Changing the model in `openclaw.json` alone has no effect — the gateway reads the env vars. Investigate: (1) whether nemoclaw provides a `nemoclaw my-assistant set-model <model>` or equivalent command, (2) whether patching the pod env vars via `kubectl patch` + pod restart is viable without a full onboard, (3) whether there's a nemoclaw API for this.
+- ⏳ **Investigate live model swapping** — `NEMOCLAW_MODEL` and `NEMOCLAW_PRIMARY_MODEL_REF` are baked into the sandbox pod's environment variables at sandbox creation time. Changing the model in `openclaw.json` alone has no effect — the gateway reads the env vars. Investigate: (1) whether openshell provides a way to patch pod env vars + restart without a full rebuild, (2) whether there's a supported openclaw API for this.
 - ⏳ **Policy builder/applier UI** — the current policy workflow (hand-editing YAML, running `openshell policy set`, knowing about full-replacement semantics, `allowed_ips` for internal IPs, etc.) is too complex for most users. Build a simple interface that lets users add/remove endpoints and applies the full policy file correctly.
 
 ## Documentation references
-- NemoClaw CLI: https://docs.nvidia.com/nemoclaw/latest/reference/commands.html
 - OpenClaw CLI: https://docs.openclaw.ai/cli
 - OpenClaw Channels: https://docs.openclaw.ai/channels/index
 - OpenClaw Telegram: https://docs.openclaw.ai/channels/telegram
 - OpenShell: https://docs.nvidia.com/openshell/latest/get-started
 
 ## Which CLI does what
-- `nemoclaw` (host): create/manage sandboxes, apply policies, start tunnel/services, onboard
-- `openshell` (host): inspect sandboxes, set network/filesystem policy, view logs, SSH config
+- `openshell` (host): create/manage sandboxes, apply policies, view logs, SSH config
 - `openclaw` (inside sandbox only): run agents, configure channels/plugins, manage sessions, TUI
-- Channel messaging (Telegram, Discord) is configured during `nemoclaw onboard` or by writing to `openclaw.json` via kubectl exec — NOT via `nemoclaw start` (that's cloudflared tunnel only)
-- `nemoclaw start` = cloudflared tunnel. `nemoclaw status` = sandbox list + cloudflared. Neither reflects Telegram state.
+- Channel messaging (Telegram, Discord) is configured by writing to `openclaw.json` via kubectl exec — openshell has no Telegram-specific commands
 - Telegram status: `openclaw channels status` inside sandbox
-- Gateway is started automatically by `nemoclaw onboard`. If it stops, restart manually: `nohup openclaw gateway run > /tmp/gateway.log 2>&1 &` inside sandbox
+- Gateway must be started manually after sandbox creation: `setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &` inside sandbox (or via `run-setup.sh`)
 
 ## Architecture note
-openclaw is NOT installed directly on the host. nemoclaw creates a Docker sandbox running an OpenShell gateway (which controls network, filesystem, and process access) with openclaw running inside it. All openclaw interaction goes through that sandbox.
+openclaw is NOT installed directly on the host. openshell manages a Docker sandbox running an OpenShell gateway (which controls network, filesystem, and process access) with openclaw running inside it. All openclaw interaction goes through that sandbox.
 
-## NemoClaw k3s cluster internals
-NemoClaw runs the OpenShell cluster as a **k3s Kubernetes cluster** inside a single Docker container (`openshell-cluster-nemoclaw`). Key pods in the `openshell` namespace:
+## OpenShell k3s cluster internals
+OpenShell runs its cluster as a **k3s Kubernetes cluster** inside a single Docker container (`openshell-cluster-openshell`). Key pods in the `openshell` namespace:
 
 ```
 pod/openshell-0        # OpenShell server (port 8080/30051). Runs openshell-server, manages policy and SSH tunnels.
@@ -46,7 +43,7 @@ pod/baseten-assistant  # Another sandbox (if multiple sandboxes created).
 kube-system pods include CoreDNS and the k3s infrastructure.
 
 **Why this matters for debugging**:
-- `docker exec openshell-cluster-nemoclaw kubectl ...` gives direct access to the cluster
+- `docker exec openshell-cluster-openshell kubectl ...` gives direct access to the cluster
 - The sandbox pod (`my-assistant`) is the running environment — you can kubectl exec into it directly, bypassing the SSH tunnel. This is useful for low-level network/config inspection when SSH doesn't give enough access.
 - The sandbox's `/etc/resolv.conf` points to `10.200.0.1` (OpenShell proxy), which does NOT forward DNS queries to external resolvers. `getent hosts <external>` returns nothing from inside the sandbox. This is by design — all outbound traffic routes through the proxy, not direct DNS/TCP.
 - The network proxy at `10.200.0.1:3128` is the OpenShell policy enforcement point. It intercepts all egress from the sandbox.
@@ -55,16 +52,16 @@ kube-system pods include CoreDNS and the k3s infrastructure.
 **Useful kubectl commands**:
 ```bash
 # List sandbox pods
-docker exec openshell-cluster-nemoclaw kubectl get all -n openshell
+docker exec openshell-cluster-openshell kubectl get all -n openshell
 
 # Exec into sandbox directly (no SSH needed)
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- <command>
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- <command>
 
 # Exec into openshell server pod
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell openshell-0 -- <command>
+docker exec openshell-cluster-openshell kubectl exec -n openshell openshell-0 -- <command>
 
 # Read sandbox openclaw config
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- cat /sandbox/.openclaw/openclaw.json
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- cat /sandbox/.openclaw/openclaw.json
 ```
 
 ## Safe config edit pattern (avoid zeroing openclaw.json)
@@ -72,7 +69,7 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 Always use a host-side temp file:
 ```bash
 # 1. Read to host
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   cat /sandbox/.openclaw/openclaw.json > /tmp/oc.json
 
 # 2. Modify on host (example: add tools.deny)
@@ -84,14 +81,13 @@ print(json.dumps(c,indent=2))
 " > /tmp/oc-updated.json
 
 # 3. Write back
-docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
+docker exec -i openshell-cluster-openshell kubectl exec -i -n openshell my-assistant -- \
   sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/oc-updated.json
 ```
 
 ## Current environment state (as of 2026-04-12)
-- **nemoclaw**: v0.0.9, installed at `~/.local/bin/nemoclaw`
 - **ollama**: running at `localhost:11434` with qwen3 family + gpt-oss:20b models
-- **Docker**: running; port 8080 is taken by `openshell-cluster-nemoclaw`
+- **Docker**: running; port 8080 is taken by `openshell-cluster-openshell`
 - **sandbox**: `my-assistant`, model `qwen3:30b`, provider `ollama-local`, phase `Ready` (rebuilt fresh 2026-04-12, end-to-end verified)
 - **openclaw**: v2026.3.11 (from fresh sandbox rebuild 2026-04-12)
 - **Telegram**: fully working — gateway running (mode:polling, @whiskey_papa_bot), bot responds to DMs; user ID `8362082345` in `allowFrom`
@@ -117,7 +113,7 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 **Upstream issues tracked**:
 - [openclaw/openclaw#30338](https://github.com/openclaw/openclaw/issues/30338) — undici dispatcher workaround
 - [openclaw/openclaw#33013](https://github.com/openclaw/openclaw/issues/33013) — Telegram channel broken with undici + VPN
-- [NVIDIA/NemoClaw#391](https://github.com/NVIDIA/NemoClaw/issues/391) — missing `node` in policy binaries causing 403s
+- [NVIDIA/openshell#391](https://github.com/NVIDIA/NemoClaw/issues/391) — missing `node` in policy binaries causing 403s
 
 **Issue 1 — Policy mode**: `access: full` causes OpenShell to close the TCP socket during TLS upgrade (Node.js can't complete handshake). Fix: use `protocol: rest, tls: terminate` — OpenShell terminates TLS itself and forwards HTTP to Telegram.
 
@@ -125,10 +121,10 @@ docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assist
 
 Fix: add `api.telegram.org` to sandbox `/etc/hosts` via kubectl exec (bypasses Landlock):
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'echo "149.154.166.110 api.telegram.org" >> /etc/hosts'
 ```
-> ⚠️ Not persistent — lost when sandbox pod restarts. Re-run after any `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ Not persistent — lost when sandbox pod restarts. Re-run after any sandbox rebuild.
 
 **Issue 3 — `openshell:resolve:env:TELEGRAM_BOT_TOKEN` not resolved**: openclaw v2026.4.10 uses the literal placeholder string as the bot token → Telegram returns 404. Fix: inject real token directly into `openclaw.json` via kubectl exec:
 ```bash
@@ -138,12 +134,12 @@ import json, sys, os
 config = json.load(open('/dev/stdin'))
 config['channels']['telegram']['accounts']['main']['botToken'] = os.environ['TOKEN']
 print(json.dumps(config, indent=2))
-" < <(docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- cat /sandbox/.openclaw/openclaw.json) > /tmp/openclaw-updated.json
+" < <(docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- cat /sandbox/.openclaw/openclaw.json) > /tmp/openclaw-updated.json
 
-docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
+docker exec -i openshell-cluster-openshell kubectl exec -i -n openshell my-assistant -- \
   sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/openclaw-updated.json
 ```
-> ⚠️ Also not persistent — lost on sandbox rebuild. Re-run after any `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ Also not persistent — lost on sandbox rebuild. Re-run after any sandbox rebuild.
 
 **Issue 4 — VPN blocks Telegram**: Host network SNI-filtering blocks `api.telegram.org`. Disconnect VPN.
 
@@ -157,11 +153,11 @@ openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
 
 **Fix**: Create the directory as a symlink to the read-write `/sandbox/.openclaw-data/` path (following the existing pattern used by other writable openclaw dirs):
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'rm -rf /sandbox/.openclaw/credentials && mkdir -p /sandbox/.openclaw-data/credentials && chown sandbox:sandbox /sandbox/.openclaw-data/credentials && ln -s /sandbox/.openclaw-data/credentials /sandbox/.openclaw/credentials'
 ```
 Also added `/sandbox/.openclaw/credentials` to `read_write` in `policies/sandbox-policy.yaml` (policy v28).
-> ⚠️ Not persistent — symlink is lost on sandbox rebuild. Re-run after `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ Not persistent — symlink is lost on sandbox rebuild. Re-run after any sandbox rebuild.
 
 ### `EACCES /sandbox/.openclaw/workspace-state.json` — RESOLVED as of 2026-04-12
 **Cause**: openclaw writes a `workspace-state.json` file to `/sandbox/.openclaw/` when processing agent runs (even without explicit `agents.defaults.workspace` config). Landlock blocks writes.
@@ -170,7 +166,7 @@ Also added `/sandbox/.openclaw/credentials` to `read_write` in `policies/sandbox
 
 **Fix**: Same symlink pattern:
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'rm -f /sandbox/.openclaw/workspace-state.json && touch /sandbox/.openclaw-data/workspace-state.json && chown sandbox:sandbox /sandbox/.openclaw-data/workspace-state.json && ln -s /sandbox/.openclaw-data/workspace-state.json /sandbox/.openclaw/workspace-state.json'
 ```
 Also added `/sandbox/.openclaw/workspace-state.json` to `read_write` in `policies/sandbox-policy.yaml`.
@@ -190,7 +186,7 @@ Also added `/sandbox/.openclaw/workspace-state.json` to `read_write` in `policie
 
 **Fix**:
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.lock && echo "Locks cleared"'
 ```
 
@@ -201,11 +197,11 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant --
 
 **Fix**: Same symlink pattern:
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'rm -rf /sandbox/.openclaw/telegram && mkdir -p /sandbox/.openclaw-data/telegram && chown sandbox:sandbox /sandbox/.openclaw-data/telegram && ln -s /sandbox/.openclaw-data/telegram /sandbox/.openclaw/telegram'
 ```
 Also added `/sandbox/.openclaw/telegram` to `read_write` in `policies/sandbox-policy.yaml` (policy v30).
-> ⚠️ Not persistent — lost on sandbox rebuild. Re-run after `nemoclaw onboard --recreate-sandbox`.
+> ⚠️ Not persistent — lost on sandbox rebuild. Re-run after any sandbox rebuild.
 
 ## Logging: gateway.log vs openshell logs
 
@@ -247,11 +243,11 @@ ssh \
   -o UserKnownHostsFile=/dev/null \
   -o GlobalKnownHostsFile=/dev/null \
   -o LogLevel=ERROR \
-  -o "ProxyCommand=/Users/rystewart/.local/bin/openshell ssh-proxy --gateway-name nemoclaw --name my-assistant" \
+  -o "ProxyCommand=openshell ssh-proxy --gateway-name nemoclaw --name my-assistant" \
   -l sandbox localhost \
   '<command>'
 ```
-Get the ProxyCommand for any sandbox with: `openshell sandbox ssh-config <sandbox-name>`
+Get the full SSH config (including ProxyCommand) for any sandbox with: `openshell sandbox ssh-config <sandbox-name>`
 
 ## Secrets
 Secrets (bot tokens, chat IDs, etc.) go in `.env` (gitignored). `.env.example` is committed and shows what's needed. Never inline secrets in README commands — always reference `source .env` + the variable name.
@@ -260,8 +256,9 @@ Secrets (bot tokens, chat IDs, etc.) go in `.env` (gitignored). `.env.example` i
 **Keep README.md in sync with reality.**
 
 **Always document both ways to run sandbox commands** — whenever a new openclaw command or workflow is added to the README, show both:
-1. Interactive: `nemoclaw <name> connect` → run command inside
-2. Non-interactive: SSH with ProxyCommand from `openshell sandbox ssh-config <name>` If we run a command and it behaves differently than documented — different flags, extra steps, workarounds needed — update README.md immediately before moving on.
+1. Interactive: `openshell sandbox connect <name>` → run command inside
+2. Non-interactive: SSH with ProxyCommand from `openshell sandbox ssh-config <name>`
+If we run a command and it behaves differently than documented — different flags, extra steps, workarounds needed — update README.md immediately before moving on.
 
 ## Useful debug commands
 ```bash
@@ -273,13 +270,11 @@ openshell logs --tail --source sandbox --level debug
 openshell logs --tail | grep -i telegram
 
 # Check Telegram channel status (run from host via SSH)
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null \
-  -o LogLevel=ERROR \
-  -o "ProxyCommand=/Users/rystewart/.local/bin/openshell ssh-proxy --gateway-name nemoclaw --name my-assistant" \
-  -l sandbox localhost 'openclaw channels status'
+SSH_CONF=$(mktemp) && openshell sandbox ssh-config my-assistant > "$SSH_CONF"
+ssh -F "$SSH_CONF" openshell-my-assistant 'openclaw channels status'
 
 # Check sandbox status
-nemoclaw my-assistant status
+openshell sandbox list
 
 # Check what's on a port
 lsof -i :8080
@@ -296,7 +291,7 @@ openshell policy set my-assistant --policy policies/sandbox-policy.yaml --wait
 
 ## openclaw configure and plugins are sandboxed
 `openclaw configure` and `openclaw plugins enable` cannot be run inside the sandbox — Landlock enforces read-only on `/sandbox/.openclaw/openclaw.json`. Both fail with `EACCES: permission denied`.
-To change config or enable plugins: exit sandbox and run `nemoclaw onboard --resume` on the host.
+To change config or enable plugins: edit `configure-openclaw.sh` and re-run `run-setup.sh` from the host.
 
 ## Platform targets
 - **Current**: Mac M-series (ARM, tested now)
@@ -334,7 +329,7 @@ This blocks `.internal` domains and RFC1918 IPs regardless of what the OpenShell
 `pkill -f "openclaw gateway"` sent via SSH sometimes doesn't stop the gateway (nohup process ignores SIGTERM). The reliable way to kill it:
 
 ```bash
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   sh -c 'kill -9 $(pgrep -f "openclaw gateway") 2>/dev/null; pkill -9 -f "openclaw gateway" 2>/dev/null; true'
 ```
 
@@ -396,7 +391,7 @@ The workspace directory must be readable. `/sandbox` is writable and accessible.
 Since Landlock prevents writes to `/sandbox/.openclaw/` from inside the sandbox, all config changes must go via kubectl exec from the host:
 ```bash
 # Read → modify → write back
-docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -- \
+docker exec openshell-cluster-openshell kubectl exec -n openshell my-assistant -- \
   cat /sandbox/.openclaw/openclaw.json | python3 -c "
 import json, sys
 config = json.load(sys.stdin)
@@ -404,7 +399,7 @@ config = json.load(sys.stdin)
 print(json.dumps(config, indent=2))
 " > /tmp/updated.json
 
-docker exec -i openshell-cluster-nemoclaw kubectl exec -i -n openshell my-assistant -- \
+docker exec -i openshell-cluster-openshell kubectl exec -i -n openshell my-assistant -- \
   sh -c 'cat > /sandbox/.openclaw/openclaw.json' < /tmp/updated.json
 ```
 Gateway hot-reloads config on change (no restart needed for most keys).
