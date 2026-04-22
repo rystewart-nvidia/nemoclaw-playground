@@ -101,18 +101,19 @@ do_restore() {
   echo ""
   echo "==> Restoring workspace to sandbox '$sandbox'..."
 
-  # Clear existing workspace so openshell sandbox upload can overwrite.
+  # Use SCP for uploads — openshell sandbox upload does not overwrite existing files.
   local ssh_conf
   ssh_conf=$(mktemp)
   openshell sandbox ssh-config "$sandbox" > "$ssh_conf"
+  trap "rm -f '$ssh_conf'" RETURN
+
   ssh -F "$ssh_conf" "openshell-$sandbox" \
     'rm -rf /sandbox/.openclaw/workspace && mkdir -p /sandbox/.openclaw/workspace' 2>/dev/null || true
-  rm -f "$ssh_conf"
 
   local count=0
   for file in "${WORKSPACE_FILES[@]}"; do
     if [[ -f "$backup_dir/$file" ]]; then
-      openshell sandbox upload "$sandbox" "$backup_dir/$file" "$WORKSPACE_REMOTE/"
+      scp -F "$ssh_conf" "$backup_dir/$file" "openshell-$sandbox:$WORKSPACE_REMOTE/"
       info "$file"
       (( count++ )) || true
     fi
@@ -120,7 +121,7 @@ do_restore() {
 
   for dir in "${WORKSPACE_DIRS[@]}"; do
     if [[ -d "$backup_dir/$dir" ]]; then
-      openshell sandbox upload "$sandbox" "$backup_dir/$dir" "$WORKSPACE_REMOTE/"
+      scp -r -F "$ssh_conf" "$backup_dir/$dir" "openshell-$sandbox:$WORKSPACE_REMOTE/"
       info "$dir/"
       (( count++ )) || true
     fi

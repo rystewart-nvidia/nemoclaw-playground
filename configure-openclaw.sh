@@ -2,7 +2,7 @@
 # configure-openclaw.sh — Runs INSIDE the sandbox to configure openclaw.
 #                         Copied into the sandbox image at /usr/local/bin/configure-openclaw by the Dockerfile.
 #
-# Preferred usage: from the host via run-setup.sh (handles SSH config generation):
+# Preferred usage: from the host via run-setup.sh (handles SSH config generation and gateway start):
 #   source .env && bash run-setup.sh
 #
 # Manual interactive usage (from inside sandbox via `openshell sandbox connect <name>`):
@@ -10,8 +10,8 @@
 #   bash /usr/local/bin/configure-openclaw
 #
 # What it does:
-#   1. Writes openclaw.json in a single Python pass: gateway mode, Telegram channel, Ollama provider, SearXNG plugin
-#   2. Starts the openclaw gateway as a background process
+#   Writes openclaw.json in a single Python pass: gateway mode, Telegram channel, Ollama provider, SearXNG plugin
+#   (Gateway start is handled separately by run-setup.sh after workspace restore)
 #
 # Environment variables (required):
 #   TELEGRAM_BOT_TOKEN  — from your .env file
@@ -37,9 +37,9 @@ if [[ -z "${ALLOWED_CHAT_IDS:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# [1/2] Configure openclaw
+# Configure openclaw
 # ---------------------------------------------------------------------------
-echo "==> [1/2] Configuring openclaw..."
+echo "==> Configuring openclaw..."
 
 python3 << 'PYEOF'
 import json, os
@@ -85,13 +85,11 @@ print('  Config updated.')
 PYEOF
 
 openclaw config validate
-echo "  openclaw configured."
-
 # Append a path reminder to AGENTS.md so the model doesn't prefix write paths
 # with the full workspace directory (which creates a double-nested structure).
 WORKSPACE_DIR="/sandbox/.openclaw/workspace"
 AGENTS_MD="$WORKSPACE_DIR/AGENTS.md"
-NOTE="
+PATH_GUIDANCE="
 ## File Paths
 When writing workspace files, use either:
 - **Just the filename:** \`USER.md\`, \`IDENTITY.md\`
@@ -99,20 +97,9 @@ When writing workspace files, use either:
 
 Do NOT use a bare relative path like \`sandbox/.openclaw/workspace/USER.md\` (no leading slash) — that resolves relative to the workspace root and creates a double-nested directory."
 
-if [[ -f "$AGENTS_MD" ]] && ! grep -q "double-nested" "$AGENTS_MD"; then
-  echo "$NOTE" >> "$AGENTS_MD"
+if [[ -f "$AGENTS_MD" ]] && ! grep -qF "$PATH_GUIDANCE" "$AGENTS_MD"; then
+  printf '%s\n' "$PATH_GUIDANCE" >> "$AGENTS_MD"
   echo "  AGENTS.md updated with path guidance."
 fi
 
-# ---------------------------------------------------------------------------
-# [2/2] Start gateway
-# ---------------------------------------------------------------------------
-echo "==> [2/2] Starting openclaw gateway..."
-pkill -f "openclaw gateway run" 2>/dev/null || true
-rm -f /tmp/gateway.log
-setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
-echo "  Gateway PID: $!"
-echo "  Log: /tmp/gateway.log"
-echo ""
-echo "Done. Watch for Telegram polling with: openshell logs --tail"
-echo "Or inside the sandbox: tail -f /tmp/gateway.log"
+echo "  openclaw configured."

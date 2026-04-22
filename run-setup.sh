@@ -10,6 +10,7 @@
 #   2. Uploads the current configure-openclaw.sh from the repo into the sandbox (always latest)
 #   3. SSHes into the sandbox and runs the uploaded script with all required env vars
 #   4. Optionally restores workspace from a backup
+#   5. Starts the openclaw gateway (after restore, so it reads the correct workspace files)
 #
 # Options:
 #   --from-backup [timestamp]  Restore workspace after setup without prompting.
@@ -27,6 +28,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# Functions
+# ---------------------------------------------------------------------------
+start_gateway() {
+  echo "==> Restarting openclaw gateway..."
+  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH'
+    openclaw gateway stop >/dev/null 2>&1; pkill -x openclaw-gateway 2>/dev/null; true
+    sleep 1
+    rm -f /tmp/gateway.log
+    setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
+    echo "  Gateway enabled (PID: $!)"
+    echo "  Log: /tmp/gateway.log"
+ENDSSH
+  echo ""
+  echo "Done. Watch for Telegram polling with: openshell logs --tail"
+  echo "Or inside the sandbox: tail -f /tmp/gateway.log"
+}
 
 # Source .env from repo root if it exists and values aren't already in the environment.
 # set -a exports every variable that is assigned, so they're available to child processes.
@@ -119,10 +138,22 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
    bash /tmp/configure-openclaw.sh"
 
 # ---------------------------------------------------------------------------
+# Stop any running gateway before restore so it can't race to recreate files
+# ---------------------------------------------------------------------------
+ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH' 2>/dev/null || true
+  openclaw gateway stop 2>/dev/null; pkill -x openclaw-gateway 2>/dev/null; true
+ENDSSH
+
+# ---------------------------------------------------------------------------
 # Restore workspace backup (optional)
 # ---------------------------------------------------------------------------
 if [[ "$RESTORE_MODE" != "skip" ]]; then
   _backup_root="${BACKUP_BASE:-$HOME/.openclaw/backups}/$SANDBOX_NAME"
+  if [[ "$RESTORE_MODE" == "auto" ]] && { [[ ! -d "$_backup_root" ]] || [[ -z "$(ls -A "$_backup_root" 2>/dev/null)" ]]; }; then
+    echo "Error: --from-backup specified but no backups found in '$_backup_root'." >&2
+    exit 1
+  fi
+
   if [[ -d "$_backup_root" ]] && [[ -n "$(ls -A "$_backup_root" 2>/dev/null)" ]]; then
     echo ""
     _latest=$(ls -1t "$_backup_root" | head -1)
@@ -136,13 +167,18 @@ if [[ "$RESTORE_MODE" != "skip" ]]; then
       echo "    Most recent: $_latest"
       read -r -p "    Restore workspace to '$SANDBOX_NAME'? [y/N] " _restore_reply || true
       if [[ "$_restore_reply" =~ ^[Yy]$ ]]; then
-        bash "$SCRIPT_DIR/scripts/backup-workspace.sh" restore "$_latest"
+        bash "$SCRIPT_DIR/scripts/backup-workspace.sh" restore "$_latest" --yes
       else
         echo "    Skipping restore."
       fi
     fi
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# Start gateway — after restore so workspace files are in place at startup
+# ---------------------------------------------------------------------------
+start_gateway
 
 echo ""
 echo "Setup complete."
