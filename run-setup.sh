@@ -35,7 +35,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 start_gateway() {
   echo "==> Restarting openclaw gateway..."
   ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH'
-    openclaw gateway stop >/dev/null 2>&1; pkill -x openclaw-gateway 2>/dev/null; true
+    openclaw gateway stop >/dev/null 2>&1 || true
+    kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
     sleep 1
     rm -f /tmp/gateway.log
     setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
@@ -141,7 +142,8 @@ ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
 # Stop any running gateway before restore so it can't race to recreate files
 # ---------------------------------------------------------------------------
 ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH' 2>/dev/null || true
-  openclaw gateway stop 2>/dev/null; pkill -x openclaw-gateway 2>/dev/null; true
+  openclaw gateway stop 2>/dev/null || true
+  kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
 ENDSSH
 
 # ---------------------------------------------------------------------------
