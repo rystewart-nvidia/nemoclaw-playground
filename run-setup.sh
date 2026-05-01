@@ -38,6 +38,7 @@ start_gateway() {
   ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH'
     openclaw gateway stop >/dev/null 2>&1 || true
     kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
+    kill -9 $(pgrep -f "openclaw-gateway" 2>/dev/null) 2>/dev/null || true
     sleep 1
     rm -f /tmp/gateway.log
     setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
@@ -53,6 +54,7 @@ stop_gateway() {
   ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH' 2>/dev/null || true
     openclaw gateway stop 2>/dev/null || true
     kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
+    kill -9 $(pgrep -f "openclaw-gateway" 2>/dev/null) 2>/dev/null || true
 ENDSSH
 }
 
@@ -71,8 +73,17 @@ install_zenquotes_plugin() {
   scp -F "$SSH_CONF" -r "$plugin_dir" "openshell-$SANDBOX_NAME:$plugin_parent/"
 
   echo "==> Installing ZenQuotes plugin as a linked local OpenClaw plugin..."
-  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
-    "openclaw plugins uninstall zenquotes --keep-files >/dev/null 2>&1 || true; openclaw plugins install -l '$plugin_remote'"
+  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" "PLUGIN_REMOTE='$plugin_remote' bash" << 'ENDSSH'
+timeout 90s bash -c '
+  openclaw plugins uninstall zenquotes --keep-files >/dev/null 2>&1 || true
+  openclaw plugins install --force -l "$PLUGIN_REMOTE"
+'
+status=$?
+if [[ $status -ne 0 ]]; then
+  echo "ERROR: ZenQuotes plugin install failed or timed out after 90s." >&2
+  exit "$status"
+fi
+ENDSSH
 }
 
 # Source .env from repo root if it exists and values aren't already in the environment.

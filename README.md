@@ -127,7 +127,7 @@ This script:
 2. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
 3. Prompts to restore a workspace backup if one exists (unless `--no-restore` or `--from-backup` is passed)
 4. Uploads `plugins/zenquotes-random-quote` into the OpenClaw workspace
-5. Installs ZenQuotes with `openclaw plugins install -l` so OpenClaw owns the linked local plugin registration
+5. Installs ZenQuotes with `openclaw plugins install --force -l` so OpenClaw owns the linked local plugin registration
 6. SSHes into the sandbox and runs the config script with all required env vars
 7. Starts the openclaw gateway
 
@@ -155,7 +155,7 @@ This repo includes a minimal local OpenClaw tool plugin at `plugins/zenquotes-ra
 
 `run-setup.sh` uploads the local plugin folder into the sandbox workspace and installs it with OpenClaw's linked local plugin flow:
 ```bash
-openclaw plugins install -l /sandbox/.openclaw/workspace/openclaw-plugins/zenquotes-random-quote
+openclaw plugins install --force -l /sandbox/.openclaw/workspace/openclaw-plugins/zenquotes-random-quote
 ```
 
 The sandbox policy includes a narrow `zenquotes` rule for `GET /api/random`. After setup, verify the plugin from the host with:
@@ -324,8 +324,12 @@ Or restart just the gateway without re-running full setup:
 ```bash
 source .env
 openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
-ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
-  "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME bash << 'ENDSSH'
+openclaw gateway stop >/dev/null 2>&1 || true
+kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
+kill -9 $(pgrep -f "openclaw-gateway" 2>/dev/null) 2>/dev/null || true
+setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
+ENDSSH
 ```
 
 **Check if running:**
@@ -444,8 +448,12 @@ The gateway runs as a background process (`setsid`). To restart it:
 ```bash
 source .env
 openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
-ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME \
-  "pkill -f 'openclaw gateway run' 2>/dev/null || true; setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &"
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME bash << 'ENDSSH'
+openclaw gateway stop >/dev/null 2>&1 || true
+kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
+kill -9 $(pgrep -f "openclaw-gateway" 2>/dev/null) 2>/dev/null || true
+setsid openclaw gateway run > /tmp/gateway.log 2>&1 < /dev/null &
+ENDSSH
 ```
 
 > **Why not `openclaw gateway install`?** The base image does not run systemd. The `install` command attempts to register a systemd service and fails. The `setsid` approach starts the gateway as a detached background process that survives the SSH session.
