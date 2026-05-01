@@ -1,0 +1,14 @@
+{
+  "id": "zenquotes",
+  "name": "ZenQuotes",
+  "description": "Fetches random quotes from ZenQuotes.",
+  "version": "0.1.0",
+  "contracts": {
+    "tools": ["zenquotes_random_quote"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

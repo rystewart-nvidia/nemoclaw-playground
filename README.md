@@ -102,10 +102,10 @@ openshell sandbox create \
 
 `configure-openclaw.sh` runs inside the sandbox and does three things:
 1. Sets the Telegram channel config (bot token, allowed chat IDs, dm policy)
-2. Writes the Ollama provider and SearXNG plugin to `openclaw.json` via Python (required because `openclaw config set` validates the full schema after each write and rejects partial provider objects)
-3. Starts the openclaw gateway as a background process
+2. Writes the Ollama provider, SearXNG plugin, and enabled plugin entries to `openclaw.json` via Python (required because `openclaw config set` validates the full schema after each write and rejects partial provider objects)
+3. Validates the OpenClaw config
 
-`run-setup.sh` is the host-side wrapper that handles SSH config generation, uploads the latest `configure-openclaw.sh`, and runs it.
+`run-setup.sh` is the host-side wrapper that handles SSH config generation, optional workspace restore, linked local plugin install, configuration, and gateway start.
 
 #### Option A — run-setup.sh (recommended, scriptable from host)
 
@@ -123,8 +123,11 @@ Options:
 This script:
 1. Generates an SSH config for the sandbox via `openshell sandbox ssh-config`
 2. Uploads the current `configure-openclaw.sh` from the repo into the sandbox (so you can iterate on it without rebuilding the Docker image)
-3. SSHes into the sandbox and runs it with all required env vars
-4. Prompts to restore a workspace backup if one exists (unless `--no-restore` or `--from-backup` is passed)
+3. Prompts to restore a workspace backup if one exists (unless `--no-restore` or `--from-backup` is passed)
+4. Uploads `plugins/zenquotes-random-quote` into the OpenClaw workspace
+5. Installs ZenQuotes with `openclaw plugins install -l` so OpenClaw owns the linked local plugin registration
+6. SSHes into the sandbox and runs the config script with all required env vars
+7. Starts the openclaw gateway
 
 `openshell sandbox ssh-config` outputs an SSH `Host` block with a `ProxyCommand` that routes traffic through the openshell runtime. The host alias is always `openshell-<sandbox-name>`.
 
@@ -141,6 +144,8 @@ export ALLOWED_CHAT_IDS="<your-chat-id>"
 export OLLAMA_MODEL="qwen3.5:9b"
 bash /usr/local/bin/configure-openclaw
 ```
+
+> **Note:** The interactive path does not upload or install local plugins. Use `run-setup.sh` when you want the ZenQuotes plugin installed and enabled.
 
 #### Verify setup completed
 
@@ -169,7 +174,7 @@ openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
 
 ## Testing
 
-Run these in order to verify all three capabilities:
+Run these in order to verify the core capabilities:
 
 **1. Onboarding — send "hi" to your Telegram bot**
 
@@ -186,6 +191,11 @@ Verify via `openshell logs --tail` — you should see a tool invocation in the n
 Expected: agent calls the `web_search` tool, SearXNG returns results, agent summarizes them.
 Verify via `docker compose logs -f searxng` — you should see an inbound search query.
 The agent response should cite sources, not use shell/exec tool calls.
+
+**4. Random quote tool — ask "fetch a random ZenQuotes quote"**
+
+Expected: agent calls the `zenquotes_random_quote` tool and returns a quote plus author.
+Verify via `openshell logs --tail` — you should see an allowed `GET` request to `zenquotes.io:443` for `/api/random`.
 
 ## Logs
 
@@ -434,10 +444,11 @@ Re-apply the policy file. This happens when `openshell term` creates an `access:
 source .env && openshell policy set $SANDBOX_NAME --policy policies/sandbox-policy.yaml --wait
 ```
 
-**SearXNG not reachable from sandbox**
+**Ollama or SearXNG not reachable from sandbox**
 Check the `allowed_ips` in `policies/sandbox-policy.yaml`. The correct host gateway IP depends on your platform:
 - macOS Docker Desktop: `192.168.65.254`
 - Linux / native Docker: `172.17.0.1`
+- OpenShell bridge: `172.29.0.254`
 
 **Web search returns no results (but SearXNG logs show a request)**
 Check that `web_search` is not in a deny list in `openclaw.json` inside the sandbox:

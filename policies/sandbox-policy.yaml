@@ -13,7 +13,8 @@
 #     allow_api_telegram_org_443 rule with access:full that overrides the protocol:rest rules
 #     and breaks the gateway. Re-apply this file immediately if that happens.
 #
-# Note: allowed_ips in searxng includes both macOS (192.168.65.254) and Linux/DGX (172.17.0.1) host gateway IPs
+# Note: allowed_ips in host.openshell.internal policies includes known macOS, Linux/DGX,
+# and OpenShell bridge host gateway IPs.
 
 version: 1
 
@@ -211,6 +212,7 @@ network_policies:
         allowed_ips:
           - 192.168.65.254   # Docker Desktop host gateway (macOS)
           - 172.17.0.1       # Docker bridge gateway (Linux/DGX)
+          - 172.29.0.254     # OpenShell bridge host gateway
     binaries:
       - { path: /usr/bin/openclaw }
       - { path: /usr/bin/node }
@@ -224,9 +226,25 @@ network_policies:
         allowed_ips:
           - 192.168.65.254   # Docker Desktop host gateway (macOS)
           - 172.17.0.1       # Docker bridge gateway (Linux/DGX)
+          - 172.29.0.254     # OpenShell bridge host gateway
     binaries:
       - { path: /usr/bin/openclaw }
       - { path: /usr/bin/node }
+
+  zenquotes:
+    name: zenquotes
+    endpoints:
+      - host: zenquotes.io
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/api/random" }
+    binaries:
+      - { path: /usr/bin/openclaw }
+      - { path: /usr/bin/node }
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/node }
 
   telegram:
     name: telegram

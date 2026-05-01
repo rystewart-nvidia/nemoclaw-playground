@@ -10,7 +10,7 @@
 #   bash /usr/local/bin/configure-openclaw
 #
 # What it does:
-#   Writes openclaw.json in a single Python pass: gateway mode, Telegram channel, Ollama provider, SearXNG plugin
+#   Writes openclaw.json in a single Python pass: gateway mode, Telegram channel, Ollama provider, SearXNG plugin, ZenQuotes plugin entry
 #   (Gateway start is handled separately by run-setup.sh after workspace restore)
 #
 # Environment variables (required):
@@ -74,10 +74,16 @@ config.setdefault('models', {}).setdefault('providers', {})['ollama'] = {
 config.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = f'ollama/{ollama_model}'
 
 # SearXNG plugin: point at the host SearXNG instance for web search
-config.setdefault('plugins', {}).setdefault('entries', {})['searxng'] = {
+plugins = config.setdefault('plugins', {})
+plugins.setdefault('enabled', True)
+entries = plugins.setdefault('entries', {})
+entries['searxng'] = {
     'enabled': True,
     'config': {'webSearch': {'baseUrl': 'http://host.openshell.internal:8888'}}
 }
+if os.environ.get('ZENQUOTES_PLUGIN_INSTALLED') == '1':
+    entries['zenquotes'] = {'enabled': True, 'config': {}}
+    print('  ZenQuotes plugin entry enabled.')
 
 with open(config_path, 'w') as f:
     json.dump(config, f, indent=2)

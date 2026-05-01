@@ -8,9 +8,10 @@
 # What it does:
 #   1. Generates an SSH config for the sandbox (openshell sandbox ssh-config)
 #   2. Uploads the current configure-openclaw.sh from the repo into the sandbox (always latest)
-#   3. SSHes into the sandbox and runs the uploaded script with all required env vars
-#   4. Optionally restores workspace from a backup
-#   5. Starts the openclaw gateway (after restore, so it reads the correct workspace files)
+#   3. Optionally restores workspace from a backup
+#   4. Uploads and installs the local ZenQuotes plugin as a linked OpenClaw plugin
+#   5. SSHes into the sandbox and runs the uploaded script with all required env vars
+#   6. Starts the openclaw gateway (after restore/install/configure, so it reads the correct workspace files)
 #
 # Options:
 #   --from-backup [timestamp]  Restore workspace after setup without prompting.
@@ -46,6 +47,32 @@ ENDSSH
   echo ""
   echo "Done. Watch for Telegram polling with: openshell logs --tail"
   echo "Or inside the sandbox: tail -f /tmp/gateway.log"
+}
+
+stop_gateway() {
+  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH' 2>/dev/null || true
+    openclaw gateway stop 2>/dev/null || true
+    kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
+ENDSSH
+}
+
+install_zenquotes_plugin() {
+  local plugin_dir="$SCRIPT_DIR/plugins/zenquotes-random-quote"
+  local plugin_parent="/sandbox/.openclaw/workspace/openclaw-plugins"
+  local plugin_remote="$plugin_parent/zenquotes-random-quote"
+
+  if [[ ! -d "$plugin_dir" ]]; then
+    echo "ERROR: ZenQuotes plugin directory not found: $plugin_dir" >&2
+    exit 1
+  fi
+
+  echo "==> Uploading ZenQuotes plugin to sandbox '$SANDBOX_NAME'..."
+  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" "rm -rf '$plugin_remote' && mkdir -p '$plugin_parent'"
+  scp -F "$SSH_CONF" -r "$plugin_dir" "openshell-$SANDBOX_NAME:$plugin_parent/"
+
+  echo "==> Installing ZenQuotes plugin as a linked local OpenClaw plugin..."
+  ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
+    "openclaw plugins uninstall zenquotes --keep-files >/dev/null 2>&1 || true; openclaw plugins install -l '$plugin_remote'"
 }
 
 # Source .env from repo root if it exists and values aren't already in the environment.
@@ -130,21 +157,10 @@ echo "    Config written to $SSH_CONF"
 echo "==> Uploading configure-openclaw.sh to sandbox '$SANDBOX_NAME'..."
 scp -F "$SSH_CONF" "$SCRIPT_DIR/configure-openclaw.sh" "openshell-$SANDBOX_NAME:/tmp/configure-openclaw.sh"
 
-echo "==> Running configure-openclaw.sh inside sandbox '$SANDBOX_NAME'..."
-ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
-  "TELEGRAM_BOT_TOKEN='$TELEGRAM_BOT_TOKEN' \
-   ALLOWED_CHAT_IDS='$ALLOWED_CHAT_IDS' \
-   OLLAMA_MODEL='$OLLAMA_MODEL' \
-   OLLAMA_CONTEXT_LENGTH='$OLLAMA_CONTEXT_LENGTH' \
-   bash /tmp/configure-openclaw.sh"
-
 # ---------------------------------------------------------------------------
 # Stop any running gateway before restore so it can't race to recreate files
 # ---------------------------------------------------------------------------
-ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" bash << 'ENDSSH' 2>/dev/null || true
-  openclaw gateway stop 2>/dev/null || true
-  kill -9 $(pgrep -f "openclaw gateway" 2>/dev/null) 2>/dev/null || true
-ENDSSH
+stop_gateway
 
 # ---------------------------------------------------------------------------
 # Restore workspace backup (optional)
@@ -176,6 +192,17 @@ if [[ "$RESTORE_MODE" != "skip" ]]; then
     fi
   fi
 fi
+
+install_zenquotes_plugin
+
+echo "==> Running configure-openclaw.sh inside sandbox '$SANDBOX_NAME'..."
+ssh -F "$SSH_CONF" "openshell-$SANDBOX_NAME" \
+  "TELEGRAM_BOT_TOKEN='$TELEGRAM_BOT_TOKEN' \
+   ALLOWED_CHAT_IDS='$ALLOWED_CHAT_IDS' \
+   OLLAMA_MODEL='$OLLAMA_MODEL' \
+   OLLAMA_CONTEXT_LENGTH='$OLLAMA_CONTEXT_LENGTH' \
+   ZENQUOTES_PLUGIN_INSTALLED=1 \
+   bash /tmp/configure-openclaw.sh"
 
 # ---------------------------------------------------------------------------
 # Start gateway — after restore so workspace files are in place at startup
