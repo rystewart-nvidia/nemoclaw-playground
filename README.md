@@ -12,6 +12,8 @@ An openshell sandbox running openclaw as a personal AI assistant, accessible via
 | OpenClaw docs | https://docs.openclaw.ai/ |
 | OpenClaw Telegram | https://docs.openclaw.ai/channels/telegram |
 | OpenClaw SearXNG | https://docs.openclaw.ai/tools/searxng-search |
+| OpenClaw plugin quick start | https://docs.openclaw.ai/plugins/building-plugins#quick-start-tool-plugin |
+| OpenClaw plugin CLI | https://docs.openclaw.ai/cli/plugins |
 
 ## Prerequisites
 
@@ -146,6 +148,21 @@ bash /usr/local/bin/configure-openclaw
 ```
 
 > **Note:** The interactive path does not upload or install local plugins. Use `run-setup.sh` when you want the ZenQuotes plugin installed and enabled.
+
+#### Custom Plugin Example
+
+This repo includes a minimal local OpenClaw tool plugin at `plugins/zenquotes-random-quote`. It registers `zenquotes_random_quote`, which fetches a random quote from `https://zenquotes.io/api/random`.
+
+`run-setup.sh` uploads the local plugin folder into the sandbox workspace and installs it with OpenClaw's linked local plugin flow:
+```bash
+openclaw plugins install -l /sandbox/.openclaw/workspace/openclaw-plugins/zenquotes-random-quote
+```
+
+The sandbox policy includes a narrow `zenquotes` rule for `GET /api/random`. After setup, verify the plugin from the host with:
+```bash
+openshell sandbox ssh-config $SANDBOX_NAME > /tmp/os-ssh-${SANDBOX_NAME}.conf
+ssh -F /tmp/os-ssh-${SANDBOX_NAME}.conf openshell-$SANDBOX_NAME "openclaw plugins inspect zenquotes"
+```
 
 #### Verify setup completed
 
